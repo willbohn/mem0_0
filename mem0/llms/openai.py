@@ -42,6 +42,8 @@ class OpenAILLM(LLMBase):
         if self._lmstudio_compat and self._lmstudio_reasoning_effort not in {"none", "low", "medium", "high"}:
             raise ValueError("MEM0_LMSTUDIO_REASONING_EFFORT must be one of: none, low, medium, high")
         self._lmstudio_timeout = self._parse_lmstudio_timeout() if self._lmstudio_compat else None
+        if self._lmstudio_compat:
+            self.config.max_tokens = self._parse_lmstudio_max_tokens()
 
         if not self.config.model:
             self.config.model = "gpt-5-mini"
@@ -59,6 +61,7 @@ class OpenAILLM(LLMBase):
             client_options = {"api_key": api_key, "base_url": base_url}
             if self._lmstudio_compat:
                 client_options["timeout"] = self._lmstudio_timeout
+                client_options["max_retries"] = 0
             self.client = OpenAI(**client_options)
 
     def _parse_lmstudio_timeout(self) -> float:
@@ -70,6 +73,17 @@ class OpenAILLM(LLMBase):
         if not math.isfinite(timeout) or not 1 <= timeout <= 600:
             raise ValueError("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS must be between 1 and 600")
         return timeout
+
+    @staticmethod
+    def _parse_lmstudio_max_tokens() -> int:
+        raw_max_tokens = os.getenv("MEM0_LMSTUDIO_MAX_TOKENS", "256")
+        try:
+            max_tokens = int(raw_max_tokens)
+        except ValueError as exc:
+            raise ValueError("MEM0_LMSTUDIO_MAX_TOKENS must be between 32 and 2000") from exc
+        if not 32 <= max_tokens <= 2000:
+            raise ValueError("MEM0_LMSTUDIO_MAX_TOKENS must be between 32 and 2000")
+        return max_tokens
 
     def _parse_response(self, response, tools):
         """

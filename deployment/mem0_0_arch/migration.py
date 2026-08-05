@@ -35,6 +35,7 @@ SHADOW_ENV_UPDATES = {
     "HISTORY_DB_PATH": "/app/state/.mem0_0/history.db",
     "MEM0_DIR": "/app/state/.mem0_0",
     "MEM0_LMSTUDIO_COMPAT": "true",
+    "MEM0_LMSTUDIO_MAX_TOKENS": "256",
     "MEM0_LMSTUDIO_REASONING_EFFORT": "none",
     "MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS": "300",
     "MEM0_0_DEPLOYMENT_MODE": "shadow",

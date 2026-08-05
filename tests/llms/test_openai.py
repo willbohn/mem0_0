@@ -516,6 +516,7 @@ def test_lmstudio_compat_bounds_the_upstream_client_timeout(monkeypatch):
         OpenAILLM(OpenAIConfig(model="local-model"))
 
     assert constructor.call_args.kwargs["timeout"] == 42.0
+    assert constructor.call_args.kwargs["max_retries"] == 0
 
 
 @pytest.mark.parametrize("timeout", ["0", "601", "nan", "invalid"])
@@ -525,6 +526,31 @@ def test_lmstudio_compat_rejects_an_invalid_upstream_timeout(monkeypatch, timeou
 
     with patch("mem0.llms.openai.OpenAI") as constructor:
         with pytest.raises(ValueError, match="MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS"):
+            OpenAILLM(OpenAIConfig(model="local-model"))
+
+    constructor.assert_not_called()
+
+
+def test_lmstudio_compat_bounds_the_extraction_output_budget(mock_openai_client, monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_MAX_TOKENS", "256")
+    llm = OpenAILLM(OpenAIConfig(model="local-model", max_tokens=2000))
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"ok":true}'))]
+    )
+
+    llm.generate_response([{"role": "user", "content": "Return JSON"}])
+
+    assert mock_openai_client.chat.completions.create.call_args.kwargs["max_tokens"] == 256
+
+
+@pytest.mark.parametrize("max_tokens", ["31", "2001", "1.5", "invalid"])
+def test_lmstudio_compat_rejects_an_invalid_output_budget(monkeypatch, max_tokens):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_MAX_TOKENS", max_tokens)
+
+    with patch("mem0.llms.openai.OpenAI") as constructor:
+        with pytest.raises(ValueError, match="MEM0_LMSTUDIO_MAX_TOKENS"):
             OpenAILLM(OpenAIConfig(model="local-model"))
 
     constructor.assert_not_called()

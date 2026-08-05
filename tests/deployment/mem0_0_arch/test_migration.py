@@ -91,6 +91,7 @@ def test_prepare_shadow_creates_private_isolated_runtime_without_touching_source
     assert "MEM0_LMSTUDIO_COMPAT=true" in rendered
     assert "MEM0_LMSTUDIO_REASONING_EFFORT=none" in rendered
     assert "MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS=300" in rendered
+    assert "MEM0_LMSTUDIO_MAX_TOKENS=256" in rendered
     assert "synthetic-secret" in rendered
     assert (paths.legacy_config / "runtime.env").read_bytes() == source_env
     assert not (paths.target_state / "runtime" / ".mem0_0" / "history.db").exists()
