@@ -1,11 +1,13 @@
 import hashlib
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from evaluation_overlay.harness import load_manifest
 from evaluation_overlay.server import (
+    _apply_llm_runtime_budgets,
     _installed_runtime_packages,
     _load_arm_config,
     _prepare_runtime_directories,
@@ -13,6 +15,14 @@ from evaluation_overlay.server import (
     _runtime_requirements_sha256,
     _search_arguments,
 )
+
+
+def test_llm_runtime_budgets_disable_hidden_provider_retries():
+    memory = SimpleNamespace(llm=SimpleNamespace(client=SimpleNamespace(max_retries=2)))
+
+    _apply_llm_runtime_budgets(memory, {"budgets": {"provider_max_retries": 0}})
+
+    assert memory.llm.client.max_retries == 0
 
 
 def test_arm_config_expands_local_endpoints_and_isolates_collection_and_history(tmp_path, monkeypatch):
@@ -28,6 +38,7 @@ def test_arm_config_expands_local_endpoints_and_isolates_collection_and_history(
     assert candidate["recall"] == {"mode": "state_aware"}
     assert legacy["recall"] == {"mode": "legacy"}
     assert candidate["llm"]["config"]["openai_base_url"] == "http://127.0.0.1:18000/v1"
+    assert candidate["llm"]["config"]["max_tokens"] == manifest["budgets"]["write_max_tokens"]
     assert candidate["embedder"]["config"]["openai_base_url"] == "http://127.0.0.1:18001/v1"
     assert candidate["vector_store"]["config"]["collection_name"] != legacy["vector_store"]["config"]["collection_name"]
     assert candidate["history_db_path"] != legacy["history_db_path"]

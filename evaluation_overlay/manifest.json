@@ -216,7 +216,8 @@
       "dataset": "memora",
       "command": [
         "{python}", "-m", "evaluation_overlay.state_benchmark", "--format", "memora", "--dataset-path",
-        "{source_dir}/data", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
+        "{source_dir}/data", "--output-dir", "{output_dir}", "--top-k", "{top_k}",
+        "--request-timeout-seconds", "{request_timeout_seconds}", "{resume_flag}"
       ]
     },
     "stale": {
@@ -224,15 +225,19 @@
       "dataset": "stale",
       "command": [
         "{python}", "-m", "evaluation_overlay.state_benchmark", "--format", "stale", "--dataset-path",
-        "{dataset_dir}/T1_T2_400_FULL.json", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
+        "{dataset_dir}/T1_T2_400_FULL.json", "--output-dir", "{output_dir}", "--top-k", "{top_k}",
+        "--request-timeout-seconds", "{request_timeout_seconds}", "{resume_flag}"
       ]
     }
   },
   "budgets": {
     "max_workers": 1,
+    "provider_max_retries": 0,
+    "request_timeout_seconds": 660,
     "seed": 42,
     "top_k": 200,
-    "top_k_cutoffs": [10, 20, 50, 200]
+    "top_k_cutoffs": [10, 20, 50, 200],
+    "write_max_tokens": 256
   },
   "gates": {
     "answer_accuracy": {"delta_min": -0.01},

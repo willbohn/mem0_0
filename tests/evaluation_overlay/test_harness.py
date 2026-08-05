@@ -117,7 +117,15 @@ def _manifest(tmp_path):
             }
             for name in ("locomo", "longmemeval", "beam", "stale", "memora")
         },
-        "budgets": {"seed": 42, "top_k": 200, "top_k_cutoffs": [10, 20, 50, 200], "max_workers": 1},
+        "budgets": {
+            "seed": 42,
+            "top_k": 200,
+            "top_k_cutoffs": [10, 20, 50, 200],
+            "max_workers": 1,
+            "provider_max_retries": 0,
+            "request_timeout_seconds": 660,
+            "write_max_tokens": 256,
+        },
         "gates": {"answer_accuracy": {"delta_min": -0.01}},
     }
     path = tmp_path / "manifest.json"
@@ -446,6 +454,8 @@ def test_runtime_attestation_binds_each_arm_to_revision_mode_models_and_store(tm
     assert len({baseline["store_id"], candidate["store_id"], legacy["store_id"]}) == 3
     assert baseline["qdrant_platform_digest"] == manifest["runtimes"]["qdrant"]["platform_digest"]
     assert baseline["fastapi_version"] == "0.141.1"
+    assert baseline["llm_max_tokens"] == 256
+    assert baseline["llm_max_retries"] == 0
     assert baseline["runtime_requirements_sha256"] == "8" * 64
     assert baseline["runtime_packages"] == {"fastapi": "0.141.1", "uvicorn": "0.52.0"}
     assert baseline["uvicorn_version"] == "0.52.0"

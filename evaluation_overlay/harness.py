@@ -27,6 +27,7 @@ ALLOWED_PLACEHOLDERS = {
     "output_dir",
     "project_name",
     "python",
+    "request_timeout_seconds",
     "resume_flag",
     "run_id",
     "seed",
@@ -305,8 +306,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if not isinstance(manifest.get("budgets"), dict) or not manifest["budgets"]:
         raise ManifestError("budgets must be a non-empty object")
     budgets = manifest["budgets"]
-    for key in ("seed", "top_k", "max_workers"):
-        if not isinstance(budgets.get(key), int) or budgets[key] < (0 if key == "seed" else 1):
+    for key in (
+        "seed",
+        "top_k",
+        "max_workers",
+        "provider_max_retries",
+        "request_timeout_seconds",
+        "write_max_tokens",
+    ):
+        if not isinstance(budgets.get(key), int) or budgets[key] < (
+            0 if key in {"provider_max_retries", "seed"} else 1
+        ):
             raise ManifestError(f"budgets.{key} must be a valid integer")
     cutoffs = budgets.get("top_k_cutoffs")
     if (
@@ -650,6 +660,8 @@ def expected_runtime_attestation(manifest: dict[str, Any], arm_name: str) -> dic
         "fastapi_version": manifest["runtimes"]["benchmark_server"]["fastapi"],
         "embedder_model": manifest["models"]["embedder"]["id"],
         "llm_model": manifest["models"]["llm"]["id"],
+        "llm_max_tokens": manifest["budgets"]["write_max_tokens"],
+        "llm_max_retries": manifest["budgets"]["provider_max_retries"],
         "qdrant_platform_digest": manifest["runtimes"]["qdrant"]["platform_digest"],
         "recall_mode": arm["recall_mode"],
         "repository_revision": manifest["repository"][revision_key],
@@ -825,6 +837,7 @@ def build_run_spec(
         "output_dir": str(output_dir / "output"),
         "project_name": f"mem0_0-{side}-{benchmark}-{run_id[:8]}",
         "python": sys.executable,
+        "request_timeout_seconds": str(manifest["budgets"]["request_timeout_seconds"]),
         "resume_flag": "--resume" if resume else "",
         "run_id": run_id,
         "seed": str(manifest["budgets"].get("seed", 0)),

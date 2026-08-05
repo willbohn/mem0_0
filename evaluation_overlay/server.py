@@ -147,6 +147,11 @@ def _instrument_provider_calls(memory: Any, telemetry: Telemetry) -> None:
         setattr(memory.embedding_model, method_name, instrumented)
 
 
+def _apply_llm_runtime_budgets(memory: Any, manifest: dict[str, Any]) -> None:
+    """Apply manifest-pinned client behavior that older SDK revisions cannot configure directly."""
+    memory.llm.client.max_retries = manifest["budgets"]["provider_max_retries"]
+
+
 def create_app(
     manifest_path: Path,
     work_dir: Path,
@@ -167,9 +172,11 @@ def create_app(
     sys.path.insert(0, str(repository_root))
     from mem0 import Memory
 
+    os.environ["OPENAI_MAX_RETRIES"] = str(manifest["budgets"]["provider_max_retries"])
     config = _load_arm_config(manifest_path, manifest, arm, work_dir, qdrant_runtime)
     _prepare_runtime_directories(config)
     memory = Memory.from_config(config)
+    _apply_llm_runtime_budgets(memory, manifest)
     loaded_module = Path(sys.modules["mem0"].__file__).resolve()
     if repository_root.resolve() not in loaded_module.parents:
         raise RuntimeError(f"mem0 loaded from {loaded_module}, not pinned worktree {repository_root}")
@@ -183,6 +190,8 @@ def create_app(
         "embedder_model": str(memory.embedding_model.config.model),
         "fastapi_version": importlib.metadata.version("fastapi"),
         "llm_model": str(memory.llm.config.model),
+        "llm_max_tokens": int(memory.llm.config.max_tokens),
+        "llm_max_retries": int(memory.llm.client.max_retries),
         "qdrant_platform_digest": qdrant_runtime["platform_digest"],
         "recall_mode": getattr(configured_recall, "mode", "legacy"),
         "repository_revision": actual_revision,

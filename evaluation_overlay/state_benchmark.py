@@ -99,9 +99,10 @@ def memora_cases(dataset_dir: Path) -> Iterable[dict[str, Any]]:
 
 
 class RestClient:
-    def __init__(self, host: str, api_key: str | None = None):
+    def __init__(self, host: str, api_key: str | None = None, timeout: float = 660):
         self.host = host.rstrip("/")
         self.api_key = api_key
+        self.timeout = timeout
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
         data = json.dumps(payload).encode() if payload is not None else None
@@ -110,7 +111,7 @@ class RestClient:
             headers["X-API-Key"] = self.api_key
         request = urllib.request.Request(f"{self.host}{path}", data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=300) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode())
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")
@@ -234,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-k", type=int, default=200)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--request-timeout-seconds", type=float, default=660)
     args = parser.parse_args(argv)
 
     if args.format == "stale":
@@ -260,7 +262,13 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError(f"observation checkpoint {case_path} contains multiple cases")
             completed.update(case_ids)
 
-    client = RestClient(os.environ["MEM0_HOST"], os.environ.get("MEM0_API_KEY"))
+    if not 1 <= args.request_timeout_seconds <= 3600:
+        parser.error("--request-timeout-seconds must be between 1 and 3600")
+    client = RestClient(
+        os.environ["MEM0_HOST"],
+        os.environ.get("MEM0_API_KEY"),
+        timeout=args.request_timeout_seconds,
+    )
     store_id = os.environ["MEM0_BENCH_STORE_ID"]
     for case in cases:
         if str(case["case_id"]) in completed:
