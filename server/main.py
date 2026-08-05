@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from models import RequestLog, User
 from pydantic import BaseModel, Field
+from provider_readiness import ProviderReadiness
 from rate_limit import limiter
 from routers import api_keys as api_keys_router
 from routers import auth as auth_router
@@ -57,7 +58,7 @@ SENSITIVE_CONFIG_KEYS = {
     "secret",
     "token",
 }
-SKIPPED_REQUEST_LOG_PATHS = {"/api/health", "/docs", "/redoc", "/openapi.json"}
+SKIPPED_REQUEST_LOG_PATHS = {"/health", "/ready", "/api/health", "/docs", "/redoc", "/openapi.json"}
 SKIPPED_REQUEST_LOG_PREFIXES = ("/requests",)
 
 BUNDLED_LLM_PROVIDERS = ("openai", "anthropic", "gemini")
@@ -144,6 +145,24 @@ set_session_factory(SessionLocal)
 initialize_state(DEFAULT_CONFIG)
 
 
+class ProviderNotReady(HTTPException):
+    def __init__(self, readiness: Dict[str, Any]) -> None:
+        self.readiness = readiness
+        super().__init__(status_code=503, detail=readiness.get("message", "Provider is not ready."))
+
+
+async def provider_not_ready_handler(_: Request, exc: ProviderNotReady) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "degraded",
+            "code": exc.readiness.get("code", "provider_unavailable"),
+            "detail": exc.detail,
+            "readiness": exc.readiness,
+        },
+    )
+
+
 app = FastAPI(
     title="Mem0 REST APIs",
     description=(
@@ -158,6 +177,7 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_exception_handler(UpstreamError, upstream_error_handler)
+app.add_exception_handler(ProviderNotReady, provider_not_ready_handler)
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
@@ -277,6 +297,61 @@ def _validate_bundled_providers(config: Dict[str, Any]) -> None:
         )
 
 
+def _provider_status() -> Dict[str, Any]:
+    readiness_enabled = any(
+        os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("MEM0_PROVIDER_READINESS", "MEM0_LMSTUDIO_COMPAT")
+    )
+    if not readiness_enabled:
+        return {
+            "status": "ready",
+            "code": "provider_check_disabled",
+            "message": "Provider model-list readiness is not enabled.",
+        }
+    config = get_current_config()
+    llm = config.get("llm") if isinstance(config.get("llm"), dict) else {}
+    embedder = config.get("embedder") if isinstance(config.get("embedder"), dict) else {}
+    llm_provider = str(llm.get("provider") or "openai")
+    embedder_provider = str(embedder.get("provider") or "openai")
+    if (llm_provider, embedder_provider) != ("openai", "openai"):
+        return {
+            "status": "ready",
+            "code": "provider_check_not_applicable",
+            "message": "OpenAI-compatible model-list readiness is not applicable to the configured providers.",
+            "providers": {"llm": llm_provider, "embedder": embedder_provider},
+        }
+    llm_config = llm.get("config") if isinstance(llm.get("config"), dict) else {}
+    embedder_config = embedder.get("config") if isinstance(embedder.get("config"), dict) else {}
+    llm_model = str(llm_config.get("model") or DEFAULT_LLM_MODEL)
+    embedder_model = str(embedder_config.get("model") or DEFAULT_EMBEDDER_MODEL)
+    base_url = str(
+        llm_config.get("openai_base_url")
+        or embedder_config.get("openai_base_url")
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_API_BASE")
+        or "https://api.openai.com/v1"
+    )
+    try:
+        return ProviderReadiness(
+            base_url=base_url,
+            llm_model=llm_model,
+            embedder_model=embedder_model,
+        ).check()
+    except Exception:
+        logging.warning("Provider readiness check failed without exposing provider details")
+        return {
+            "status": "degraded",
+            "code": "provider_invalid_response",
+            "message": "Configured provider readiness could not be determined.",
+        }
+
+
+def _require_provider_ready() -> None:
+    readiness = _provider_status()
+    if readiness.get("status") != "ready":
+        raise ProviderNotReady(readiness)
+
+
 def _should_log_request(request: Request) -> bool:
     if request.method == "OPTIONS":
         return False
@@ -337,6 +412,20 @@ async def log_requests(request: Request, call_next):
             )
 
 
+@app.get("/health", summary="Check Mem0 liveness")
+def health() -> Dict[str, Any]:
+    """Keep application liveness separate from provider readiness."""
+    return {"status": "ok", "provider": _provider_status()}
+
+
+@app.get("/ready", summary="Check provider and model readiness", response_model=None)
+def ready() -> JSONResponse | Dict[str, Any]:
+    readiness = _provider_status()
+    if readiness.get("status") != "ready":
+        return JSONResponse(status_code=503, content=readiness)
+    return readiness
+
+
 @app.get("/configure", summary="Get current Mem0 configuration")
 def get_config(_auth=Depends(verify_auth)):
     return _redact_config(get_current_config())
@@ -358,6 +447,7 @@ def set_config(config: Dict[str, Any], _auth=Depends(require_admin)):
 @app.post("/generate-instructions", summary="Generate custom instructions from a use case")
 def generate_instructions(req: GenerateInstructionsRequest, _auth=Depends(verify_auth)):
     """Generate custom instructions and a contextual test message tailored to a use case."""
+    _require_provider_ready()
     try:
         llm = get_memory_instance().llm
         prompt = (
@@ -389,6 +479,7 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
         raise HTTPException(status_code=400, detail="At least one identifier (user_id, agent_id, run_id) is required.")
 
     params = {k: v for k, v in memory_create.model_dump().items() if v is not None and k != "messages"}
+    _require_provider_ready()
     try:
         response = get_memory_instance().add(messages=[m.model_dump() for m in memory_create.messages], **params)
         if response.get("results"):
@@ -511,6 +602,7 @@ def get_memory(memory_id: str, _auth=Depends(verify_auth)):
 @app.post("/search", summary="Search memories")
 def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
     """Search for memories based on a query."""
+    _require_provider_ready()
     try:
         filters = search_req.filters or {}
         deprecated_keys = []
@@ -565,6 +657,7 @@ def feedback_memory(memory_id: str, feedback_req: FeedbackRequest, _auth=Depends
 @app.put("/memories/{memory_id}", summary="Update a memory")
 def update_memory(memory_id: str, updated_memory: MemoryUpdate, _auth=Depends(verify_auth)):
     """Update an existing memory."""
+    _require_provider_ready()
     try:
         fields_set = getattr(updated_memory, "model_fields_set", getattr(updated_memory, "__fields_set__", set()))
         params = {"memory_id": memory_id}

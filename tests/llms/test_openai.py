@@ -464,3 +464,51 @@ def test_openai_llm_preserves_proxies_from_base_config(mock_openai_client):
     llm = OpenAILLM(config)
     assert llm.config.http_client_proxies == "http://proxy.local:8080"
     assert isinstance(llm.config.http_client, httpx.Client)
+
+
+@pytest.mark.parametrize("compat_value", ["1", "true", "TRUE", "yes", "on"])
+def test_lmstudio_compat_converts_json_object_to_text(mock_openai_client, monkeypatch, compat_value):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", compat_value)
+    llm = OpenAILLM(OpenAIConfig(model="local-model"))
+    messages = [{"role": "user", "content": "Return JSON"}]
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content='{"ok":true}'))]
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    llm.generate_response(messages, response_format={"type": "json_object"})
+
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["response_format"] == {"type": "text"}
+
+
+def test_lmstudio_compat_disabled_preserves_json_object(mock_openai_client, monkeypatch):
+    monkeypatch.delenv("MEM0_LMSTUDIO_COMPAT", raising=False)
+    llm = OpenAILLM(OpenAIConfig(model="gpt-4.1"))
+    messages = [{"role": "user", "content": "Return JSON"}]
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content='{"ok":true}'))]
+    mock_openai_client.chat.completions.create.return_value = mock_response
+    response_format = {"type": "json_object"}
+
+    llm.generate_response(messages, response_format=response_format)
+
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["response_format"] == response_format
+
+
+def test_lmstudio_compat_preserves_non_json_object_formats(mock_openai_client, monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "on")
+    llm = OpenAILLM(OpenAIConfig(model="local-model"))
+    messages = [{"role": "user", "content": "Return schema JSON"}]
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content='{"ok":true}'))]
+    mock_openai_client.chat.completions.create.return_value = mock_response
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "result", "schema": {"type": "object"}},
+    }
+
+    llm.generate_response(messages, response_format=response_format)
+
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["response_format"] == response_format

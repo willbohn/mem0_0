@@ -134,7 +134,18 @@ class OpenAILLM(LLMBase):
                 params["store"] = self.config.store
 
         if response_format:
-            params["response_format"] = response_format
+            # LM Studio's OpenAI-compatible endpoint accepts ``text`` and
+            # ``json_schema`` but rejects OpenAI's legacy ``json_object``.
+            # Keep the compatibility switch explicit so normal OpenAI users
+            # retain the upstream request shape.
+            if (
+                os.getenv("MEM0_LMSTUDIO_COMPAT", "").lower() in {"1", "true", "yes", "on"}
+                and isinstance(response_format, dict)
+                and response_format.get("type") == "json_object"
+            ):
+                params["response_format"] = {"type": "text"}
+            else:
+                params["response_format"] = response_format
         if tools:  # TODO: Remove tools if no issues found with new memory addition logic
             params["tools"] = tools
             params["tool_choice"] = tool_choice

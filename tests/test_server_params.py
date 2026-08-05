@@ -50,11 +50,16 @@ def _mock_memory():
 
 
 @pytest.fixture
-def client(_mock_memory):
+def client(_mock_memory, monkeypatch):
     """Return a TestClient wired to the server app with mocked Memory."""
     import server.main as server_main
     with patch.dict(os.environ, {"ADMIN_API_KEY": ""}):
         importlib.reload(server_main)
+    monkeypatch.setattr(
+        server_main,
+        "_provider_status",
+        lambda: {"status": "ready", "code": "ready", "message": "Provider is ready."},
+    )
     server_main.app.dependency_overrides[server_main.require_admin] = lambda: SimpleNamespace(role="admin")
     return TestClient(server_main.app)
 
@@ -164,6 +169,76 @@ class TestSearchStateAwareParameters:
         _, kwargs = mock_memory.search.call_args
         assert "rerank" not in kwargs
         assert "max_chars" not in kwargs
+
+
+class TestProviderReadinessRoutes:
+    def test_health_stays_live_when_provider_is_degraded(self, client):
+        with patch(
+            "server.main._provider_status",
+            return_value={"status": "degraded", "code": "provider_unavailable", "message": "Unavailable."},
+        ):
+            response = client.get("/health")
+
+        assert response.status_code == 200
+        assert response.json()["provider"]["code"] == "provider_unavailable"
+
+    def test_ready_returns_bounded_provider_failure(self, client):
+        with patch(
+            "server.main._provider_status",
+            return_value={"status": "degraded", "code": "model_missing", "message": "Missing."},
+        ):
+            response = client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json()["code"] == "model_missing"
+
+    def test_provider_dependent_operation_fails_before_calling_memory(self, client, mock_memory):
+        mock_memory.search.reset_mock()
+        with patch(
+            "server.main._provider_status",
+            return_value={"status": "degraded", "code": "model_missing", "message": "Missing."},
+        ):
+            response = client.post("/search", json={"query": "food", "user_id": "u1"})
+
+        assert response.status_code == 503
+        assert response.json()["code"] == "model_missing"
+        mock_memory.search.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("path", "body", "memory_method"),
+        [
+            (
+                "/memories",
+                {"messages": [{"role": "user", "content": "Remember this"}], "user_id": "u1"},
+                "add",
+            ),
+            ("/memories/mem-1", {"text": "Updated"}, "update"),
+            ("/generate-instructions", {"use_case": "Local assistant"}, None),
+        ],
+    )
+    def test_other_provider_dependent_operations_fail_closed(self, client, mock_memory, path, body, memory_method):
+        if memory_method:
+            getattr(mock_memory, memory_method).reset_mock()
+        with patch(
+            "server.main._provider_status",
+            return_value={"status": "degraded", "code": "provider_unavailable", "message": "Unavailable."},
+        ):
+            response = client.put(path, json=body) if memory_method == "update" else client.post(path, json=body)
+
+        assert response.status_code == 503
+        assert response.json()["code"] == "provider_unavailable"
+        if memory_method:
+            getattr(mock_memory, memory_method).assert_not_called()
+
+    def test_read_only_audit_remains_available_when_provider_is_degraded(self, client, mock_memory):
+        with patch(
+            "server.main._provider_status",
+            return_value={"status": "degraded", "code": "provider_unavailable", "message": "Unavailable."},
+        ):
+            response = client.post("/memories/audit", json={"filters": {"user_id": "u1"}})
+
+        assert response.status_code == 200
+        mock_memory.audit.assert_called_once_with({"user_id": "u1"}, limit=1000)
 
 
 # ===========================================================================
