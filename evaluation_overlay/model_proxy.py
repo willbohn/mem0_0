@@ -39,6 +39,8 @@ class ModelProxyConfig:
     resolved_device: str | None
     total_layers: int | None
     upstream: str
+    batch_size: int = 2048
+    ubatch_size: int = 512
 
 
 def _is_loopback(host: str | None) -> bool:
@@ -63,6 +65,8 @@ def validate_proxy_config(config: ModelProxyConfig) -> None:
         raise ValueError("an explicit device with all GPU layers is required")
     if config.enable_thinking is not False:
         raise ValueError("benchmark inference must explicitly disable thinking")
+    if config.batch_size <= 0 or config.ubatch_size <= 0 or config.ubatch_size > config.batch_size:
+        raise ValueError("model proxy batch sizes must be positive and physical must not exceed logical")
     for value, label in (
         (config.artifact_sha256, "model artifact SHA-256"),
         (config.launcher_sha256, "launcher SHA-256"),
@@ -99,6 +103,7 @@ def build_proxy_attestation(config: ModelProxyConfig) -> dict[str, Any]:
     return {
         "artifact_sha256": config.artifact_sha256,
         "backend_verified": True,
+        "batch_size": config.batch_size,
         "device": config.device,
         "enable_thinking": config.enable_thinking,
         "gpu_layers": config.gpu_layers,
@@ -109,6 +114,7 @@ def build_proxy_attestation(config: ModelProxyConfig) -> dict[str, Any]:
         "receipt_sha256": config.receipt_sha256,
         "resolved_device": config.resolved_device,
         "total_layers": config.total_layers,
+        "ubatch_size": config.ubatch_size,
     }
 
 
@@ -141,6 +147,10 @@ def build_llama_command(
         "1",
         "--ctx-size",
         "8192" if model_role == "embedder" else "32768",
+        "--batch-size",
+        str(config.batch_size),
+        "--ubatch-size",
+        str(config.ubatch_size),
     ]
     if model_role == "embedder":
         command.extend(("--embedding", "--pooling", "mean"))
@@ -351,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     receipts = verify_model_receipts(manifest, args.work_dir.resolve())
     launcher = _verified_launcher(manifest)
     artifact = manifest["models"][args.model]["artifact"]
+    batch_sizes = manifest["runtimes"]["llama_server"]["batch_sizes"][args.model]
     artifact_path = (args.work_dir.resolve() / "models" / args.model / artifact["path"]).resolve()
     config = ModelProxyConfig(
         api_key=api_key,
@@ -368,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
         resolved_device=None,
         total_layers=None,
         upstream=f"http://127.0.0.1:{args.upstream_port}/v1",
+        batch_size=batch_sizes["logical"],
+        ubatch_size=batch_sizes["physical"],
     )
     validate_proxy_config(config)
     runtime_dir = args.work_dir.resolve() / "runtime" / "models" / args.model

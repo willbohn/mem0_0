@@ -218,6 +218,21 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     llama_server = _require_mapping(runtimes.get("llama_server"), "runtimes.llama_server")
     if llama_server.get("binary") != "llama-server":
         raise ManifestError("runtimes.llama_server.binary must be llama-server")
+    batch_sizes = _require_mapping(llama_server.get("batch_sizes"), "runtimes.llama_server.batch_sizes")
+    for role in ("llm", "embedder"):
+        role_sizes = _require_mapping(batch_sizes.get(role), f"runtimes.llama_server.batch_sizes.{role}")
+        logical = role_sizes.get("logical")
+        physical = role_sizes.get("physical")
+        if (
+            not isinstance(logical, int)
+            or not isinstance(physical, int)
+            or logical <= 0
+            or physical <= 0
+            or physical > logical
+        ):
+            raise ManifestError(
+                f"runtimes.llama_server.batch_sizes.{role} must use positive physical <= logical sizes"
+            )
     _require_sha256(llama_server.get("sha256"), "runtimes.llama_server.sha256")
     if not isinstance(llama_server.get("version"), str) or not llama_server["version"]:
         raise ManifestError("runtimes.llama_server.version is required")
@@ -741,6 +756,7 @@ def verify_model_endpoints(
         expected_attestation = {
             "artifact_sha256": manifest["models"][name]["artifact"]["sha256"],
             "backend_verified": True,
+            "batch_size": manifest["runtimes"]["llama_server"]["batch_sizes"][name]["logical"],
             "kind": "mem0_0_model_proxy_v1",
             "device": manifest["runtimes"]["llama_server"]["device"],
             "enable_thinking": manifest["runtimes"]["llama_server"]["enable_thinking"],
@@ -751,6 +767,7 @@ def verify_model_endpoints(
             "receipt_sha256": expected_fingerprint,
             "resolved_device": manifest["runtimes"]["llama_server"]["device"],
             "total_layers": attestation.get("total_layers"),
+            "ubatch_size": manifest["runtimes"]["llama_server"]["batch_sizes"][name]["physical"],
         }
         if (
             not isinstance(attestation.get("offloaded_layers"), int)

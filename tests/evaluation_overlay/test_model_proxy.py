@@ -52,6 +52,7 @@ def test_models_payload_attests_exact_receipt_fingerprint():
     assert build_proxy_attestation(config) == {
         "artifact_sha256": "b" * 64,
         "backend_verified": True,
+        "batch_size": 2048,
         "device": "Vulkan0",
         "enable_thinking": False,
         "gpu_layers": "all",
@@ -62,6 +63,7 @@ def test_models_payload_attests_exact_receipt_fingerprint():
         "receipt_sha256": fingerprint,
         "resolved_device": "Vulkan0",
         "total_layers": 25,
+        "ubatch_size": 512,
     }
 
 
@@ -84,7 +86,14 @@ def test_llama_command_binds_exact_artifact_alias_and_role(tmp_path):
         total_layers=25,
         upstream="http://127.0.0.1:18100/v1",
     )
-    embedder = ModelProxyConfig(**{**llm.__dict__, "model_id": "example/embedder"})
+    embedder = ModelProxyConfig(
+        **{
+            **llm.__dict__,
+            "model_id": "example/embedder",
+            "batch_size": 8192,
+            "ubatch_size": 8192,
+        }
+    )
 
     llm_command = build_llama_command(llm, Path("/usr/bin/llama-server"), key_file, "llm")
     embedder_command = build_llama_command(embedder, Path("/usr/bin/llama-server"), key_file, "embedder")
@@ -97,6 +106,8 @@ def test_llama_command_binds_exact_artifact_alias_and_role(tmp_path):
     assert "--embedding" not in llm_command
     assert "--embedding" in embedder_command
     assert embedder_command[embedder_command.index("--pooling") + 1] == "mean"
+    assert embedder_command[embedder_command.index("--batch-size") + 1] == "8192"
+    assert embedder_command[embedder_command.index("--ubatch-size") + 1] == "8192"
 
 
 def test_chat_completion_requests_disable_thinking_deterministically():

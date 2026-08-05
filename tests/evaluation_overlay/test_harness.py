@@ -80,6 +80,10 @@ def _manifest(tmp_path):
             },
             "llama_server": {
                 "binary": "llama-server",
+                "batch_sizes": {
+                    "embedder": {"logical": 8192, "physical": 8192},
+                    "llm": {"logical": 2048, "physical": 512},
+                },
                 "device": "Vulkan0",
                 "enable_thinking": False,
                 "gpu_layers": "all",
@@ -474,6 +478,7 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
                     {
                         "artifact_sha256": self.receipt_sha256["artifact_sha256"],
                         "backend_verified": True,
+                        "batch_size": manifest["runtimes"]["llama_server"]["batch_sizes"][self.receipt_sha256["role"]]["logical"],
                         "device": "Vulkan0",
                         "enable_thinking": False,
                         "gpu_layers": "all",
@@ -484,6 +489,7 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
                         "receipt_sha256": self.receipt_sha256["receipt_sha256"],
                         "resolved_device": "Vulkan0",
                         "total_layers": 25,
+                        "ubatch_size": manifest["runtimes"]["llama_server"]["batch_sizes"][self.receipt_sha256["role"]]["physical"],
                     }
                 ).encode()
             return json.dumps(
@@ -506,6 +512,7 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
                     "artifact_sha256": manifest["models"][name]["artifact"]["sha256"],
                     "model_id": manifest["models"][name]["id"],
                     "receipt_sha256": receipts[name]["receipt_sha256"],
+                    "role": name,
                 },
             )
         return Response(manifest["models"][name]["id"], receipts[name]["receipt_sha256"])

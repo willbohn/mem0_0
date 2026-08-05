@@ -137,6 +137,10 @@
     },
     "llama_server": {
       "binary": "llama-server",
+      "batch_sizes": {
+        "embedder": {"logical": 8192, "physical": 8192},
+        "llm": {"logical": 2048, "physical": 512}
+      },
       "device": "Vulkan0",
       "enable_thinking": false,
       "gpu_layers": "all",
