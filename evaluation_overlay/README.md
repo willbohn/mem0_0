@@ -27,7 +27,7 @@ git -C .evaluation-overlay/sources/stale checkout ea7d391103a151927cd29d2f01d875
 git clone https://github.com/geniesinc/Memora.git .evaluation-overlay/sources/memora
 git -C .evaluation-overlay/sources/memora checkout a6493188efc836d6511ed5e4163fe3ba87da30ff
 git worktree add --detach .evaluation-overlay/worktrees/baseline 50bdaaea0c02744720ed374d88584fd01494eeb7
-git worktree add --detach .evaluation-overlay/worktrees/candidate 0ea19eb2c4f119248a2a47cec2dbf5b065511aa4
+git worktree add --detach .evaluation-overlay/worktrees/candidate 574714d404826499538007be00496ad61829d65a
 ```
 
 Populate each `.evaluation-overlay/datasets/<name>/` from its pinned source, then add `.source-receipt.json` with a SHA-256 entry for every consumed file. For example:

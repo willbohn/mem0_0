@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": {
     "baseline_revision": "50bdaaea0c02744720ed374d88584fd01494eeb7",
-    "candidate_revision": "75255cba1b451c1ce79bde33ad9cc485ae993a70"
+    "candidate_revision": "574714d404826499538007be00496ad61829d65a"
   },
   "sources": {
     "memory_benchmarks": {
