@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import subprocess
@@ -10,6 +11,7 @@ from evaluation_overlay.harness import (
     build_run_spec,
     expected_runtime_attestation,
     load_manifest,
+    materialize_model_artifact,
     run_benchmark,
     verify_dataset_receipts,
     verify_model_receipts,
@@ -40,8 +42,46 @@ def _manifest(tmp_path):
             for name in ("locomo", "longmemeval", "beam", "stale", "memora")
         },
         "models": {
-            "llm": {"id": "example/model", "revision": "e" * 40},
-            "embedder": {"id": "example/embedder", "revision": "f" * 40},
+            "llm": {
+                "id": "example/model",
+                "revision": "e" * 40,
+                "artifact": {
+                    "format": "gguf",
+                    "path": "model.gguf",
+                    "repository": "example/model-gguf",
+                    "revision": "1" * 40,
+                    "sha256": hashlib.sha256(b"model\n").hexdigest(),
+                    "size": 6,
+                },
+            },
+            "embedder": {
+                "id": "example/embedder",
+                "revision": "f" * 40,
+                "artifact": {
+                    "format": "gguf",
+                    "path": "embedder.gguf",
+                    "repository": "example/embedder-gguf",
+                    "revision": "3" * 40,
+                    "sha256": hashlib.sha256(b"embedder\n").hexdigest(),
+                    "size": 9,
+                },
+            },
+        },
+        "runtimes": {
+            "llama_server": {
+                "binary": "llama-server",
+                "sha256": "7" * 64,
+                "version": "10216",
+            },
+            "qdrant": {
+                "container_name": "mem0_0-benchmark-qdrant",
+                "host": "127.0.0.1",
+                "image": "docker.io/qdrant/qdrant@sha256:" + "5" * 64,
+                "platform": "linux/amd64",
+                "platform_digest": "sha256:" + "6" * 64,
+                "port": 6333,
+                "version": "1.18.3",
+            },
         },
         "arms": {
             name: {
@@ -75,6 +115,36 @@ def test_manifest_requires_all_arms_and_benchmarks(tmp_path):
     path.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(ManifestError, match="stale"):
+        load_manifest(path)
+
+
+def test_manifest_requires_digest_pinned_qdrant_runtime(tmp_path):
+    path = _manifest(tmp_path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["runtimes"]["qdrant"]["image"] = "docker.io/qdrant/qdrant:latest"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="digest-pinned"):
+        load_manifest(path)
+
+
+def test_manifest_requires_pinned_llama_server_binary(tmp_path):
+    path = _manifest(tmp_path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    del value["runtimes"]["llama_server"]["sha256"]
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="runtimes.llama_server.sha256"):
+        load_manifest(path)
+
+
+def test_manifest_requires_exact_model_artifact_pin(tmp_path):
+    path = _manifest(tmp_path)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    del value["models"]["embedder"]["artifact"]["sha256"]
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="models.embedder.artifact.sha256"):
         load_manifest(path)
 
 
@@ -188,16 +258,79 @@ def test_model_receipts_verify_artifact_hashes(tmp_path):
     for name, model in manifest["models"].items():
         model_dir = tmp_path / "work" / "models" / name
         model_dir.mkdir(parents=True)
-        payload = f"{name}\n".encode()
-        (model_dir / "artifact.bin").write_bytes(payload)
+        payload = b"model\n" if name == "llm" else b"embedder\n"
+        (model_dir / model["artifact"]["path"]).write_bytes(payload)
         receipt = {key: model[key] for key in ("id", "revision")}
-        receipt["files"] = {"artifact.bin": hashlib.sha256(payload).hexdigest()}
+        receipt["artifact"] = model["artifact"]
+        receipt["files"] = {model["artifact"]["path"]: hashlib.sha256(payload).hexdigest()}
         (model_dir / ".source-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
 
     verified = verify_model_receipts(manifest, tmp_path / "work")
 
     assert set(verified) == {"llm", "embedder"}
     assert all(value["receipt_sha256"] for value in verified.values())
+
+
+def test_model_receipts_reject_unpinned_local_artifact(tmp_path):
+    manifest = load_manifest(_manifest(tmp_path))
+    model = manifest["models"]["llm"]
+    model_dir = tmp_path / "work" / "models" / "llm"
+    model_dir.mkdir(parents=True)
+    (model_dir / "different.gguf").write_bytes(b"model\n")
+    receipt = {key: model[key] for key in ("id", "revision")}
+    receipt["artifact"] = {**model["artifact"], "path": "different.gguf"}
+    receipt["files"] = {"different.gguf": hashlib.sha256(b"model\n").hexdigest()}
+    (model_dir / ".source-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(ManifestError, match="artifact pin"):
+        verify_model_receipts(manifest, tmp_path / "work")
+
+
+def test_materialize_model_artifact_creates_verified_hardlink_and_receipt(tmp_path):
+    manifest = load_manifest(_manifest(tmp_path))
+    source = tmp_path / "source.gguf"
+    source.write_bytes(b"model\n")
+    embedder_source = tmp_path / "embedder.gguf"
+    embedder_source.write_bytes(b"embedder\n")
+
+    receipt = materialize_model_artifact(manifest, tmp_path / "work", "llm", source)
+    materialize_model_artifact(manifest, tmp_path / "work", "embedder", embedder_source)
+
+    target = tmp_path / "work" / "models" / "llm" / "model.gguf"
+    assert target.read_bytes() == b"model\n"
+    assert target.stat().st_ino == source.stat().st_ino
+    assert receipt["artifact"] == manifest["models"]["llm"]["artifact"]
+    assert verify_model_receipts(manifest, tmp_path / "work")["llm"]["files"] == {
+        "model.gguf": hashlib.sha256(b"model\n").hexdigest()
+    }
+
+
+def test_materialize_model_artifact_rejects_wrong_bytes_without_writing(tmp_path):
+    manifest = load_manifest(_manifest(tmp_path))
+    source = tmp_path / "source.gguf"
+    source.write_bytes(b"wrong")
+
+    with pytest.raises(ManifestError, match="does not match the pinned artifact"):
+        materialize_model_artifact(manifest, tmp_path / "work", "llm", source)
+
+    assert not (tmp_path / "work" / "models" / "llm" / "model.gguf").exists()
+
+
+def test_materialize_model_artifact_requires_explicit_cross_device_copy(tmp_path, monkeypatch):
+    manifest = load_manifest(_manifest(tmp_path))
+    source = tmp_path / "source.gguf"
+    source.write_bytes(b"model\n")
+    monkeypatch.setattr("os.link", lambda *_: (_ for _ in ()).throw(OSError(errno.EXDEV, "cross-device")))
+
+    with pytest.raises(ManifestError, match="explicit copy approval"):
+        materialize_model_artifact(manifest, tmp_path / "work", "llm", source)
+
+    receipt = materialize_model_artifact(manifest, tmp_path / "work", "llm", source, allow_copy=True)
+
+    target = tmp_path / "work" / "models" / "llm" / "model.gguf"
+    assert target.read_bytes() == b"model\n"
+    assert target.stat().st_ino != source.stat().st_ino
+    assert receipt["files"] == {"model.gguf": hashlib.sha256(b"model\n").hexdigest()}
 
 
 def test_runtime_attestation_binds_each_arm_to_revision_mode_models_and_store(tmp_path):
@@ -212,6 +345,7 @@ def test_runtime_attestation_binds_each_arm_to_revision_mode_models_and_store(tm
     assert candidate["recall_mode"] == "state_aware"
     assert baseline["recall_mode"] == legacy["recall_mode"] == "legacy"
     assert len({baseline["store_id"], candidate["store_id"], legacy["store_id"]}) == 3
+    assert baseline["qdrant_platform_digest"] == manifest["runtimes"]["qdrant"]["platform_digest"]
 
 
 def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypatch):
@@ -236,6 +370,16 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
             return None
 
         def read(self):
+            if self.model_id == "attestation":
+                return json.dumps(
+                    {
+                        "artifact_sha256": self.receipt_sha256["artifact_sha256"],
+                        "kind": "mem0_0_model_proxy_v1",
+                        "launcher_sha256": "7" * 64,
+                        "model_id": self.receipt_sha256["model_id"],
+                        "receipt_sha256": self.receipt_sha256["receipt_sha256"],
+                    }
+                ).encode()
             return json.dumps(
                 {
                     "data": [
@@ -249,6 +393,15 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
 
     def fake_urlopen(request, timeout):
         name = "llm" if "18000" in request.full_url else "embedder"
+        if request.full_url.endswith("/mem0_0/attestation"):
+            return Response(
+                "attestation",
+                {
+                    "artifact_sha256": manifest["models"][name]["artifact"]["sha256"],
+                    "model_id": manifest["models"][name]["id"],
+                    "receipt_sha256": receipts[name]["receipt_sha256"],
+                },
+            )
         return Response(manifest["models"][name]["id"], receipts[name]["receipt_sha256"])
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -258,11 +411,13 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
             "base_url": "http://127.0.0.1:18000/v1",
             "model_id": manifest["models"]["llm"]["id"],
             "receipt_sha256": receipts["llm"]["receipt_sha256"],
+            "proxy_attestation": "mem0_0_model_proxy_v1",
         },
         "embedder": {
             "base_url": "http://127.0.0.1:18001/v1",
             "model_id": manifest["models"]["embedder"]["id"],
             "receipt_sha256": receipts["embedder"]["receipt_sha256"],
+            "proxy_attestation": "mem0_0_model_proxy_v1",
         },
     }
 
@@ -299,4 +454,18 @@ def test_model_endpoint_verification_rejects_unbound_advertised_model(tmp_path, 
     monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
 
     with pytest.raises(ManifestError, match="artifact fingerprint"):
+        verify_model_endpoints(manifest, receipts)
+
+
+def test_model_endpoint_verification_rejects_non_loopback_endpoint(tmp_path, monkeypatch):
+    manifest = load_manifest(_manifest(tmp_path))
+    receipts = {
+        "llm": {"receipt_sha256": "1" * 64},
+        "embedder": {"receipt_sha256": "2" * 64},
+    }
+    monkeypatch.setenv("MEM0_BENCH_LOCAL_API_KEY", "local")
+    monkeypatch.setenv("MEM0_BENCH_LLM_BASE_URL", "https://models.example.com/v1")
+    monkeypatch.setenv("MEM0_BENCH_EMBED_BASE_URL", "http://127.0.0.1:18001/v1")
+
+    with pytest.raises(ManifestError, match="loopback"):
         verify_model_endpoints(manifest, receipts)

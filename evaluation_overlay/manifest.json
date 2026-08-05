@@ -60,11 +60,43 @@
   "models": {
     "embedder": {
       "id": "BAAI/bge-m3",
-      "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+      "artifact": {
+        "format": "gguf",
+        "path": "bge-m3-Q8_0.gguf",
+        "repository": "gpustack/bge-m3-GGUF",
+        "revision": "2d48f1737679ad900d5c26c5aad5410e9c70fdca",
+        "sha256": "950f4a8e5e19477a6d3c26d2f162233c20002c601f75e4b002e3239997821167",
+        "size": 634553760
+      }
     },
     "llm": {
       "id": "prism-ml/Bonsai-27B-gguf",
-      "revision": "f10afb355f104535e3e3e98cf7ab7795c72bd292"
+      "revision": "f10afb355f104535e3e3e98cf7ab7795c72bd292",
+      "artifact": {
+        "format": "gguf",
+        "path": "Bonsai-27B-Q1_0.gguf",
+        "repository": "prism-ml/Bonsai-27B-gguf",
+        "revision": "f10afb355f104535e3e3e98cf7ab7795c72bd292",
+        "sha256": "17ef842e47450caeb8eaa3ebfbbab5d2f2278b62b79be107985fb69a2f819aa0",
+        "size": 3803452480
+      }
+    }
+  },
+  "runtimes": {
+    "llama_server": {
+      "binary": "llama-server",
+      "sha256": "1e936560cde21d5262f19673b5c8f81bae4d52d4b2d9bddb6298c3ae913b83f8",
+      "version": "10216"
+    },
+    "qdrant": {
+      "container_name": "mem0_0-benchmark-qdrant",
+      "host": "127.0.0.1",
+      "image": "docker.io/qdrant/qdrant@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
+      "platform": "linux/amd64",
+      "platform_digest": "sha256:ecc81d662bb9bb734db879b94461eb44be38604fc259491d478ad7e673238a0d",
+      "port": 6333,
+      "version": "1.18.3"
     }
   },
   "arms": {
@@ -134,7 +166,7 @@
       "dataset": "stale",
       "command": [
         "{python}", "-m", "evaluation_overlay.state_benchmark", "--format", "stale", "--dataset-path",
-        "{dataset_dir}/STALE.json", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
+        "{dataset_dir}/T1_T2_400_FULL.json", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
       ]
     }
   },

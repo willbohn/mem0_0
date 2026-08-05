@@ -36,9 +36,18 @@ Populate each `.evaluation-overlay/datasets/<name>/` from its pinned source, the
 {"kind":"huggingface","repository":"STALEproj/STALE","revision":"617c51dc200b5ab09970834144c7e51c77959af0","files":{"STALE.json":"<64 lowercase hex characters>"}}
 ```
 
-The expected local files are `locomo/locomo10.json`, `longmemeval/longmemeval_s_cleaned.json`, the Hugging Face BEAM cache under `beam/`, and `stale/STALE.json`. Memora data is read directly from its separately verified, pinned Git checkout, so it does not duplicate those files or require a second receipt.
+The expected local files are `locomo/locomo10.json`, `longmemeval/longmemeval_s_cleaned.json`, the pinned and deterministically converted Hugging Face BEAM cache under `beam/`, and `stale/T1_T2_400_FULL.json`. Memora data is read directly from its separately verified, pinned Git checkout, so it does not duplicate those files or require a second receipt.
 
-Create equivalent receipts below `.evaluation-overlay/models/llm/` and `.evaluation-overlay/models/embedder/`. Model receipts use `id`, `revision`, and a non-empty `files` SHA-256 map. Verified dataset and model file hashes are incorporated into every executable run fingerprint, so replacing a local artifact invalidates resume even when its repository revision label is unchanged.
+Model artifacts are pinned more tightly than datasets: each manifest entry names the serving ID and source revision plus the exact runtime artifact repository, revision, relative path, byte size, format, and SHA-256. Do not hand-author or relabel model receipts. Verify and hard-link an existing artifact into the private work tree instead:
+
+```bash
+python -m evaluation_overlay.cli prepare-model --model embedder \
+  --source "$HOME/.lmstudio/models/gpustack/bge-m3-GGUF/bge-m3-Q8_0.gguf" --copy
+python -m evaluation_overlay.cli prepare-model --model llm \
+  --source /path/to/pinned/Bonsai-27B-Q1_0.gguf
+```
+
+The command first attempts a hard link. Cross-filesystem copies require the explicit `--copy` flag and are verified again before atomic placement, so a large copy never happens silently. The checked-in Bonsai pin is the `prism-ml/Bonsai-27B-gguf` Q1 artifact, not LM Studio's similarly named `lmstudio-community/Bonsai-27B-GGUF` file; the latter is a different byte sequence and is rejected. The BGE-M3 serving ID remains `BAAI/bge-m3`, while the manifest explicitly records that the served Q8 GGUF artifact is the pinned `gpustack/bge-m3-GGUF` derivative. Verified model file hashes are incorporated into every executable run fingerprint, so replacing a local artifact invalidates resume.
 
 No secret values are committed. Render the selected `config/*.json.template` outside Git using:
 
@@ -47,6 +56,15 @@ No secret values are committed. Render the selected `config/*.json.template` out
 - `MEM0_BENCH_EMBED_BASE_URL` for the OpenAI-compatible BGE-M3 endpoint.
 
 The manifest pins the public model artifact as `prism-ml/Bonsai-27B-gguf`; `prism-ml/bonsai-27b` is not the canonical public repository ID. All arms must use the same model artifacts, prompts, seeds, token budgets, and answer/judge endpoints.
+
+Qdrant is also immutable input. The manifest pins both the multi-architecture image index and the selected `linux/amd64` platform digest. Use the included launcher; it refuses to replace a pre-existing container, verifies the live container image ID, repository digest, platform digest, platform, port binding, and version, then writes an ignored runtime receipt:
+
+```bash
+python -m evaluation_overlay.qdrant_runtime start
+python -m evaluation_overlay.qdrant_runtime verify
+```
+
+Each benchmark server independently re-inspects the running container and refuses to start if the live runtime no longer matches that receipt. Keep baseline, candidate, and candidate-legacy collection names isolated as declared in the manifest.
 
 ## Start, verify, plan, and run
 
@@ -60,7 +78,17 @@ python -m evaluation_overlay.server --arm candidate_legacy --repository-root .ev
 
 The three processes listen on ports 18888, 28888, and 38888. They can share Qdrant because their verified collection names are distinct. Set `MEM0_BENCH_QDRANT_HOST` and `MEM0_BENCH_QDRANT_PORT` when Qdrant is not at `127.0.0.1:6333`.
 
-Preflight calls `/models` on both configured OpenAI-compatible endpoints and requires the exact pinned model IDs. Each matching model object must also include `metadata.mem0_0_artifact_fingerprint`, equal to the SHA-256 fingerprint of that model's verified `.source-receipt.json`. The attested endpoint URL and receipt fingerprint become part of the executable run fingerprint, so changing endpoints or served weights invalidates resume. Benchmark subprocesses receive `OPENAI_BASE_URL` and `OPENAI_API_KEY` only from the corresponding `MEM0_BENCH_*` variables; the key is redacted from plans and never written into run state.
+Preflight calls `/models` on both configured OpenAI-compatible endpoints and requires the exact pinned model IDs. Each matching model object must also include `metadata.mem0_0_artifact_fingerprint`, equal to the SHA-256 fingerprint of that model's verified `.source-receipt.json`. Stock `llama-server` does not add this metadata; run it behind the included loopback-only attestation proxy:
+
+```bash
+export MEM0_BENCH_LOCAL_API_KEY='use-a-local-random-value'
+python -m evaluation_overlay.model_proxy --model llm --upstream-port 18100 --port 18000
+python -m evaluation_overlay.model_proxy --model embedder --upstream-port 18101 --port 18001
+export MEM0_BENCH_LLM_BASE_URL=http://127.0.0.1:18000/v1
+export MEM0_BENCH_EMBED_BASE_URL=http://127.0.0.1:18001/v1
+```
+
+The proxy itself launches the SHA-pinned `llama-server` binary with the exact verified artifact path and pinned model alias; arbitrary upstream processes are not accepted by the CLI. Both listener and child server use loopback addresses, and every request requires the local API key. The proxy confirms its child advertises the exact alias before it returns receipt-bound model and launcher metadata. Preflight rejects non-loopback endpoints and requires the proxy-specific attestation. The attested endpoint URL and receipt fingerprint become part of the executable run fingerprint, so changing endpoints or served weights invalidates resume. Benchmark subprocesses receive `OPENAI_BASE_URL` and `OPENAI_API_KEY` only from the corresponding `MEM0_BENCH_*` variables; the key is redacted from plans and never written into run state.
 
 ```bash
 python -m evaluation_overlay.cli verify --artifacts-only

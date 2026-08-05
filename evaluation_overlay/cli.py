@@ -10,6 +10,7 @@ from evaluation_overlay.harness import (
     REQUIRED_BENCHMARKS,
     build_run_spec,
     load_manifest,
+    materialize_model_artifact,
     run_benchmark,
     verify_dataset_receipts,
     verify_model_receipts,
@@ -127,6 +128,30 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prepare_model(args: argparse.Namespace) -> int:
+    manifest, _, work_dir = _manifest_and_paths(args)
+    receipt = materialize_model_artifact(
+        manifest,
+        work_dir,
+        args.model,
+        args.source,
+        allow_copy=args.copy,
+    )
+    print(
+        json.dumps(
+            {
+                "artifact": receipt["artifact"]["path"],
+                "model": args.model,
+                "receipt": str(work_dir / "models" / args.model / ".source-receipt.json"),
+                "sha256": receipt["artifact"]["sha256"],
+                "status": "verified",
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def _summarize(args: argparse.Namespace) -> int:
     summary = summarize_observations(load_observations(args.observations), cutoffs=args.cutoff)
     _write_json(args.output, summary)
@@ -211,6 +236,19 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", action="store_true")
     run.add_argument("--dry-run", action="store_true")
     run.set_defaults(func=_run)
+
+    prepare_model = subparsers.add_parser(
+        "prepare-model", help="Verify and hard-link an exact pinned model artifact into the private work tree"
+    )
+    add_common(prepare_model)
+    prepare_model.add_argument("--model", required=True, choices=("llm", "embedder"))
+    prepare_model.add_argument("--source", required=True, type=Path)
+    prepare_model.add_argument(
+        "--copy",
+        action="store_true",
+        help="Allow a verified byte-for-byte copy when source and work tree are on different filesystems",
+    )
+    prepare_model.set_defaults(func=_prepare_model)
 
     summarize = subparsers.add_parser("summarize", help="Create a content-free summary from normalized JSONL")
     summarize.add_argument("observations", type=Path)

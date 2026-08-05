@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from evaluation_overlay.harness import expected_runtime_attestation, load_manifest
+from evaluation_overlay.qdrant_runtime import verify_runtime as verify_qdrant_runtime
 
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
@@ -35,7 +36,14 @@ def _expand_environment(value: Any) -> Any:
     return _ENV_REFERENCE.sub(replace, value)
 
 
-def _load_arm_config(manifest_path: Path, manifest: dict[str, Any], arm: str, work_dir: Path) -> dict[str, Any]:
+def _load_arm_config(
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    arm: str,
+    work_dir: Path,
+    qdrant_runtime: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    qdrant_runtime = qdrant_runtime or manifest["runtimes"]["qdrant"]
     template_path = manifest_path.parent / manifest["arms"][arm]["config"]
     config = _expand_environment(json.loads(template_path.read_text(encoding="utf-8")))
     config["history_db_path"] = str(work_dir / "runtime" / arm / ".mem0_0" / "history.db")
@@ -44,8 +52,8 @@ def _load_arm_config(manifest_path: Path, manifest: dict[str, Any], arm: str, wo
         "config": {
             "collection_name": manifest["arms"][arm]["store_id"],
             "embedding_model_dims": config["embedder"]["config"]["embedding_dims"],
-            "host": os.environ.get("MEM0_BENCH_QDRANT_HOST", "127.0.0.1"),
-            "port": int(os.environ.get("MEM0_BENCH_QDRANT_PORT", "6333")),
+            "host": qdrant_runtime["host"],
+            "port": qdrant_runtime["port"],
         },
     }
     return config
@@ -134,6 +142,7 @@ def create_app(
 
     manifest = load_manifest(manifest_path)
     expected = expected_runtime_attestation(manifest, arm)
+    qdrant_runtime = verify_qdrant_runtime(manifest, work_dir)
     actual_revision = _repository_revision(repository_root)
     if actual_revision != expected["repository_revision"]:
         raise RuntimeError(
@@ -143,7 +152,7 @@ def create_app(
     sys.path.insert(0, str(repository_root))
     from mem0 import Memory
 
-    config = _load_arm_config(manifest_path, manifest, arm, work_dir)
+    config = _load_arm_config(manifest_path, manifest, arm, work_dir, qdrant_runtime)
     memory = Memory.from_config(config)
     loaded_module = Path(sys.modules["mem0"].__file__).resolve()
     if repository_root.resolve() not in loaded_module.parents:
@@ -157,6 +166,7 @@ def create_app(
         "arm": arm,
         "embedder_model": str(memory.embedding_model.config.model),
         "llm_model": str(memory.llm.config.model),
+        "qdrant_platform_digest": qdrant_runtime["platform_digest"],
         "recall_mode": getattr(configured_recall, "mode", "legacy"),
         "repository_revision": actual_revision,
         "store_id": config["vector_store"]["config"]["collection_name"],
@@ -169,7 +179,11 @@ def create_app(
 
     @app.get("/benchmark-attestation")
     def benchmark_attestation() -> dict[str, Any]:
-        return {**actual_attestation, "telemetry": telemetry.snapshot()}
+        return {
+            **actual_attestation,
+            "qdrant_runtime_receipt": qdrant_runtime["receipt_sha256"],
+            "telemetry": telemetry.snapshot(),
+        }
 
     @app.post("/memories")
     def add_memories(request: dict[str, Any]) -> Any:

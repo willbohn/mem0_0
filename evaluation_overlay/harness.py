@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
+import shutil
 import string
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +87,28 @@ def _require_revision(value: Any, path: str) -> None:
         raise ManifestError(f"{path} must be a full 40-character hexadecimal revision")
 
 
+def _require_sha256(value: Any, path: str, *, prefix: bool = False) -> None:
+    expected_length = 71 if prefix else 64
+    digest = value[7:] if isinstance(value, str) and prefix and value.startswith("sha256:") else value
+    if (
+        not isinstance(value, str)
+        or len(value) != expected_length
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in string.hexdigits for character in digest)
+    ):
+        suffix = "sha256:<64 hexadecimal characters>" if prefix else "64 hexadecimal characters"
+        raise ManifestError(f"{path} must be {suffix}")
+
+
+def _require_safe_relative_path(value: Any, path: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ManifestError(f"{path} is required")
+    candidate = Path(value)
+    if candidate.is_absolute() or value in {".", ".."} or ".." in candidate.parts:
+        raise ManifestError(f"{path} must be a safe relative path")
+
+
 def _require_mapping(value: Any, path: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ManifestError(f"{path} must be an object")
@@ -129,6 +154,40 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         if not model.get("id"):
             raise ManifestError(f"models.{name}.id is required")
         _require_revision(model.get("revision"), f"models.{name}.revision")
+        artifact = _require_mapping(model.get("artifact"), f"models.{name}.artifact")
+        if not isinstance(artifact.get("repository"), str) or not artifact["repository"]:
+            raise ManifestError(f"models.{name}.artifact.repository is required")
+        _require_revision(artifact.get("revision"), f"models.{name}.artifact.revision")
+        _require_safe_relative_path(artifact.get("path"), f"models.{name}.artifact.path")
+        _require_sha256(artifact.get("sha256"), f"models.{name}.artifact.sha256")
+        if not isinstance(artifact.get("size"), int) or artifact["size"] <= 0:
+            raise ManifestError(f"models.{name}.artifact.size must be a positive integer")
+        if artifact.get("format") not in {"gguf", "safetensors"}:
+            raise ManifestError(f"models.{name}.artifact.format must be gguf or safetensors")
+
+    runtimes = _require_mapping(manifest.get("runtimes"), "runtimes")
+    llama_server = _require_mapping(runtimes.get("llama_server"), "runtimes.llama_server")
+    if llama_server.get("binary") != "llama-server":
+        raise ManifestError("runtimes.llama_server.binary must be llama-server")
+    _require_sha256(llama_server.get("sha256"), "runtimes.llama_server.sha256")
+    if not isinstance(llama_server.get("version"), str) or not llama_server["version"]:
+        raise ManifestError("runtimes.llama_server.version is required")
+    qdrant = _require_mapping(runtimes.get("qdrant"), "runtimes.qdrant")
+    image = qdrant.get("image")
+    if not isinstance(image, str) or "@sha256:" not in image:
+        raise ManifestError("runtimes.qdrant.image must be digest-pinned")
+    _require_sha256(image.rsplit("@", 1)[-1], "runtimes.qdrant.image digest", prefix=True)
+    _require_sha256(qdrant.get("platform_digest"), "runtimes.qdrant.platform_digest", prefix=True)
+    if qdrant.get("platform") not in {"linux/amd64", "linux/arm64"}:
+        raise ManifestError("runtimes.qdrant.platform must be linux/amd64 or linux/arm64")
+    if not isinstance(qdrant.get("version"), str) or not qdrant["version"]:
+        raise ManifestError("runtimes.qdrant.version is required")
+    if qdrant.get("container_name") != "mem0_0-benchmark-qdrant":
+        raise ManifestError("runtimes.qdrant.container_name must be mem0_0-benchmark-qdrant")
+    if qdrant.get("host") not in {"127.0.0.1", "::1"}:
+        raise ManifestError("runtimes.qdrant.host must be a loopback address")
+    if not isinstance(qdrant.get("port"), int) or not 1 <= qdrant["port"] <= 65535:
+        raise ManifestError("runtimes.qdrant.port must be between 1 and 65535")
 
     arms = _require_mapping(manifest.get("arms"), "arms")
     if set(arms) != REQUIRED_ARMS:
@@ -301,13 +360,81 @@ def verify_model_receipts(manifest: dict[str, Any], work_dir: Path) -> dict[str,
         actual = {key: receipt.get(key) for key in expected}
         if actual != expected:
             raise ManifestError(f"model {name} receipt does not match the pinned manifest")
+        if receipt.get("artifact") != model["artifact"]:
+            raise ManifestError(f"model {name} receipt does not match the artifact pin")
+        expected_files = {model["artifact"]["path"]: model["artifact"]["sha256"]}
+        if receipt.get("files") != expected_files:
+            raise ManifestError(f"model {name} receipt files do not match the artifact pin")
         files = _verify_file_hashes(receipt_path.parent, receipt.get("files"), f"model {name}")
+        artifact_path = receipt_path.parent / model["artifact"]["path"]
+        if artifact_path.stat().st_size != model["artifact"]["size"]:
+            raise ManifestError(f"model {name} artifact size does not match the manifest")
         verified[name] = {
+            "artifact": model["artifact"],
             "files": files,
             "receipt_sha256": _fingerprint(receipt),
             "revision": model["revision"],
         }
     return verified
+
+
+def materialize_model_artifact(
+    manifest: dict[str, Any],
+    work_dir: Path,
+    name: str,
+    source_path: Path,
+    *,
+    allow_copy: bool = False,
+) -> dict[str, Any]:
+    """Hard-link one already downloaded, exactly pinned model artifact into the private benchmark work tree."""
+    validate_manifest(manifest)
+    if name not in {"llm", "embedder"}:
+        raise ManifestError(f"unknown model {name!r}")
+    model = manifest["models"][name]
+    artifact = model["artifact"]
+    source_path = source_path.resolve()
+    try:
+        source_size = source_path.stat().st_size
+        source_sha256 = _sha256_file(source_path)
+    except OSError as exc:
+        raise ManifestError(f"model {name} source artifact is unavailable at {source_path}") from exc
+    if source_size != artifact["size"] or source_sha256 != artifact["sha256"]:
+        raise ManifestError(f"model {name} source does not match the pinned artifact")
+
+    model_dir = (work_dir / "models" / name).resolve()
+    target_path = model_dir / artifact["path"]
+    model_dir.mkdir(parents=True, exist_ok=True)
+    if target_path.exists():
+        if target_path.stat().st_size != source_size or _sha256_file(target_path) != source_sha256:
+            raise ManifestError(f"model {name} target exists with different content")
+    else:
+        try:
+            os.link(source_path, target_path)
+        except OSError as exc:
+            if not allow_copy:
+                raise ManifestError(
+                    f"cannot hard-link model {name} into {model_dir}; rerun with explicit copy approval"
+                ) from exc
+            temporary_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+            try:
+                with source_path.open("rb") as source, temporary_path.open("xb") as target:
+                    shutil.copyfileobj(source, target, length=8 * 1024 * 1024)
+                    target.flush()
+                    os.fsync(target.fileno())
+                if temporary_path.stat().st_size != source_size or _sha256_file(temporary_path) != source_sha256:
+                    raise ManifestError(f"copied model {name} failed post-copy verification")
+                os.replace(temporary_path, target_path)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+
+    receipt = {
+        "artifact": artifact,
+        "files": {artifact["path"]: artifact["sha256"]},
+        "id": model["id"],
+        "revision": model["revision"],
+    }
+    _atomic_write_json(model_dir / ".source-receipt.json", receipt)
+    return receipt
 
 
 def expected_runtime_attestation(manifest: dict[str, Any], arm_name: str) -> dict[str, Any]:
@@ -317,6 +444,7 @@ def expected_runtime_attestation(manifest: dict[str, Any], arm_name: str) -> dic
         "arm": arm_name,
         "embedder_model": manifest["models"]["embedder"]["id"],
         "llm_model": manifest["models"]["llm"]["id"],
+        "qdrant_platform_digest": manifest["runtimes"]["qdrant"]["platform_digest"],
         "recall_mode": arm["recall_mode"],
         "repository_revision": manifest["repository"][revision_key],
         "store_id": arm["store_id"],
@@ -372,6 +500,13 @@ def verify_model_endpoints(
     for name, (variable_name, base_url, model_id) in endpoint_specs.items():
         if not base_url:
             raise ManifestError(f"{variable_name} is required")
+        parsed = urllib.parse.urlsplit(base_url)
+        try:
+            is_loopback = parsed.hostname == "localhost" or ipaddress.ip_address(parsed.hostname or "").is_loopback
+        except ValueError:
+            is_loopback = False
+        if parsed.scheme != "http" or not is_loopback:
+            raise ManifestError(f"{variable_name} must be an HTTP loopback endpoint")
         request = urllib.request.Request(
             f"{base_url.rstrip('/')}/models",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -400,9 +535,28 @@ def verify_model_endpoints(
             raise ManifestError(
                 f"{name} endpoint artifact fingerprint does not match the locally verified model receipt"
             )
+        attestation_request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/mem0_0/attestation",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        try:
+            with urllib.request.urlopen(attestation_request, timeout=10) as response:
+                attestation = json.loads(response.read().decode())
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise ManifestError(f"cannot verify the mem0_0 proxy attestation for {name}") from exc
+        expected_attestation = {
+            "artifact_sha256": manifest["models"][name]["artifact"]["sha256"],
+            "kind": "mem0_0_model_proxy_v1",
+            "launcher_sha256": manifest["runtimes"]["llama_server"]["sha256"],
+            "model_id": model_id,
+            "receipt_sha256": expected_fingerprint,
+        }
+        if attestation != expected_attestation:
+            raise ManifestError(f"{name} endpoint is not the receipt-bound mem0_0 model proxy")
         verified[name] = {
             "base_url": base_url.rstrip("/"),
             "model_id": model_id,
+            "proxy_attestation": "mem0_0_model_proxy_v1",
             "receipt_sha256": expected_fingerprint,
         }
     return verified
