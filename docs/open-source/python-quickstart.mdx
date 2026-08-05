@@ -82,7 +82,7 @@ By default `Memory()` wires up:
 - OpenAI `gpt-5-mini` for fact extraction and updates
 - OpenAI `text-embedding-3-small` embeddings (1536 dimensions)
 - Qdrant vector store with on-disk data at `/tmp/qdrant`
-- SQLite history at `~/.mem0/history.db`
+- SQLite history under the resolved local state directory. Fresh `mem0_0` installs use `~/.mem0_0/history.db`; an existing `~/.mem0` directory remains the compatibility fallback until explicitly migrated. `MEM0_DIR` still overrides both.
 - No reranker (add one in the config when you need it)
 </Note>
 

@@ -1,0 +1,30 @@
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+
+ARG SOURCE_REVISION
+ARG SOURCE_TREE_SHA256
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION} \
+    io.mem0_0.source-tree-sha256=${SOURCE_TREE_SHA256}
+
+WORKDIR /app
+
+COPY pyproject.toml README.md LICENSE /src/
+COPY mem0 /src/mem0
+COPY server/requirements.txt /tmp/server-requirements.txt
+RUN sed '/^mem0ai[<>=]/d' /tmp/server-requirements.txt > /tmp/server-requirements-without-mem0.txt \
+    && pip install --no-cache-dir /src \
+    && pip install --no-cache-dir -r /tmp/server-requirements-without-mem0.txt
+
+COPY server/*.py server/alembic.ini /app/
+COPY server/alembic /app/alembic
+COPY server/routers /app/routers
+COPY deployment/mem0_0_arch/entrypoint.sh /usr/local/bin/mem0_0-entrypoint
+RUN chmod 0555 /usr/local/bin/mem0_0-entrypoint
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    MEM0_DIR=/app/state/.mem0_0 \
+    HISTORY_DB_PATH=/app/state/.mem0_0/history.db
+
+ENTRYPOINT ["/usr/local/bin/mem0_0-entrypoint"]

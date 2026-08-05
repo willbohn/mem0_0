@@ -8,6 +8,7 @@ previously silently dropped by Pydantic v2's default extra='ignore' behavior.
 
 import importlib
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -637,6 +638,23 @@ class TestGetMemories:
         assert kwargs["filters"] == {"user_id": "test_routing_user"}
         assert kwargs["top_k"] == 1000
 
+    def test_get_memories_applies_extended_scope_before_top_k(self, client, mock_memory):
+        response = client.get(
+            "/memories?user_id=will&agent_id=codex&machine_id=arch-local"
+            "&project_id=mem0_0&data_class=assistant-memory&top_k=9"
+        )
+
+        assert response.status_code == 200
+        _, kwargs = mock_memory.get_all.call_args
+        assert kwargs["filters"] == {
+            "user_id": "will",
+            "agent_id": "codex",
+            "machine_id": "arch-local",
+            "project_id": "mem0_0",
+            "data_class": "assistant-memory",
+        }
+        assert kwargs["top_k"] == 9
+
     def test_get_memories_admin_top_k_zero_not_defaulted(self, client, mock_memory):
         mock_memory.vector_store.list.return_value = []
 
@@ -645,6 +663,25 @@ class TestGetMemories:
         assert response.status_code == 200
         _, kwargs = mock_memory.vector_store.list.call_args
         assert kwargs["top_k"] == 0
+
+    def test_get_memories_admin_listing_hides_internal_lifecycle_metadata(self, client, mock_memory):
+        mock_memory.vector_store.list.return_value = [[
+            SimpleNamespace(
+                id="memory-1",
+                payload={
+                    "data": "public memory",
+                    "user_id": "will",
+                    "source": "fixture",
+                    "_mem0_status": "active",
+                    "_mem0_source_hashes": ["a" * 64],
+                },
+            )
+        ]]
+
+        response = client.get("/memories?top_k=1")
+
+        assert response.status_code == 200
+        assert response.json()["results"][0]["metadata"] == {"source": "fixture"}
 
     def test_get_memories_rejects_top_k_above_limit(self, client, mock_memory):
         response = client.get("/memories?user_id=test_routing_user&top_k=1001")

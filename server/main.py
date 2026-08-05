@@ -39,6 +39,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import func, select
 
 from mem0.exceptions import ValidationError as Mem0ValidationError
+from mem0.memory.lifecycle import strip_internal_metadata
 
 load_dotenv()
 
@@ -396,7 +397,9 @@ def _serialize_memory(row: Any) -> Dict[str, Any]:
         "run_id": payload.get("run_id"),
         "hash": payload.get("hash"),
         "expiration_date": payload.get("expiration_date"),
-        "metadata": {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS},
+        "metadata": strip_internal_metadata(
+            {k: v for k, v in payload.items() if k not in _RESERVED_PAYLOAD_KEYS}
+        ),
         "created_at": payload.get("created_at"),
         "updated_at": payload.get("updated_at"),
     }
@@ -414,6 +417,9 @@ def get_all_memories(
     user_id: Optional[str] = None,
     run_id: Optional[str] = None,
     agent_id: Optional[str] = None,
+    machine_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    data_class: Optional[str] = None,
     top_k: Optional[int] = Query(None, ge=0, le=ALL_MEMORIES_LIMIT),
     show_expired: bool = Query(False),
     _auth=Depends(verify_auth),
@@ -427,7 +433,16 @@ def get_all_memories(
             # Admin all-memory listing is intentionally raw; scoped get_all below applies expiry visibility.
             return _list_all_memories(limit=top_k if top_k is not None else ALL_MEMORIES_LIMIT)
         filters = {
-            k: v for k, v in {"user_id": user_id, "run_id": run_id, "agent_id": agent_id}.items() if v
+            k: v
+            for k, v in {
+                "user_id": user_id,
+                "run_id": run_id,
+                "agent_id": agent_id,
+                "machine_id": machine_id,
+                "project_id": project_id,
+                "data_class": data_class,
+            }.items()
+            if v
         }
         params = {"filters": filters}
         if top_k is not None:

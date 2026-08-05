@@ -5,10 +5,11 @@ import tempfile
 import uuid
 from hashlib import sha256
 
+from mem0.utils.paths import resolve_mem0_dir
+
 # Set up the directory path
 VECTOR_ID = str(uuid.uuid4())
-home_dir = os.path.expanduser("~")
-mem0_dir = os.environ.get("MEM0_DIR") or os.path.join(home_dir, ".mem0")
+mem0_dir = str(resolve_mem0_dir())
 os.makedirs(mem0_dir, exist_ok=True)
 
 _logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ def _config_path():
 
 
 def _load_config():
-    """Load ~/.mem0/config.json, returning {} on missing/malformed file."""
+    """Load the resolved local config, returning {} on missing/malformed data."""
     path = _config_path()
     if not os.path.exists(path):
         return {}
@@ -33,7 +34,7 @@ def _load_config():
 
 
 def _write_config(config):
-    """Best-effort write of ~/.mem0/config.json. Never raises."""
+    """Best-effort write of the resolved local config. Never raises."""
     path = _config_path()
     temp_path = None
     try:
@@ -54,7 +55,7 @@ def _write_config(config):
 
 
 def setup_config():
-    """Ensure ~/.mem0/config.json exists with a top-level user_id.
+    """Ensure the resolved local config exists with a top-level user_id.
 
     Idempotent: backfills user_id for users whose config was written by the
     CLI (which writes telemetry.anonymous_id but no top-level user_id).
@@ -76,7 +77,7 @@ def get_user_id():
 
 
 def read_anon_ids():
-    """Return anon IDs and alias markers from ~/.mem0/config.json.
+    """Return anon IDs and alias markers from the resolved local config.
 
     Returns a dict with keys "oss", "cli", "aliased_pairs" (IDs may be
     None). OSS Python writes top-level "user_id"; the CLI writes

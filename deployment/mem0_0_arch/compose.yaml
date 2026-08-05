@@ -1,0 +1,59 @@
+name: mem0_0-arch-shadow
+
+services:
+  postgres:
+    image: ${MEM0_0_PGVECTOR_IMAGE:?Set MEM0_0_PGVECTOR_IMAGE to an immutable digest}
+    restart: unless-stopped
+    shm_size: 128mb
+    env_file:
+      - ${MEM0_0_SHADOW_ENV_FILE:-/home/will/.config/mem0_0-arch/shadow.env}
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: mem0
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-p", "25432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -p 25432 -d postgres -U mem0"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - mem0_0_arch_shadow_postgres_data:/var/lib/postgresql/data
+      - ../../server/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+
+  mem0:
+    profiles: ["application"]
+    image: localhost/mem0_0-arch:${MEM0_0_SOURCE_REVISION:?Set the exact candidate Git revision}
+    restart: unless-stopped
+    env_file:
+      - ${MEM0_0_SHADOW_ENV_FILE:-/home/will/.config/mem0_0-arch/shadow.env}
+    environment:
+      MEM0_0_API_PORT: "28889"
+      MEM0_0_DEPLOYMENT_MODE: shadow
+      MEM0_DIR: /app/state/.mem0_0
+      HISTORY_DB_PATH: /app/state/.mem0_0/history.db
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "25432"
+    network_mode: host
+    volumes:
+      - /home/will/.local/share/mem0_0-arch/runtime:/app/state
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:28889/openapi.json', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  mem0_0_arch_shadow_postgres_data:
+    name: mem0_0_arch_shadow_postgres_data

@@ -1,0 +1,20 @@
+[Unit]
+Description=Canonical mem0_0 Arch shadow deployment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/will/Documents/CodingWorkspaces/mem0_0
+EnvironmentFile=/home/will/.config/mem0_0-arch/deployment.env
+ExecStartPre=/usr/bin/python -m deployment.mem0_0_arch.migration --home /home/will
+ExecStartPre=/usr/bin/test -f /home/will/.local/share/mem0_0-arch/runtime/.mem0_0/history.db
+ExecStart=/usr/bin/python -m deployment.mem0_0_arch.shadow_runtime --repository /home/will/Documents/CodingWorkspaces/mem0_0 --compose-file deployment/mem0_0_arch/compose.yaml
+ExecStartPost=/usr/bin/python -m deployment.mem0_0_arch.readiness --home /home/will --wait-seconds 120
+ExecStop=/usr/bin/podman compose -f deployment/mem0_0_arch/compose.yaml stop
+TimeoutStartSec=900
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

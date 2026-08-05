@@ -6,11 +6,11 @@ from pydantic import BaseModel, Field
 from mem0.configs.rerankers.config import RerankerConfig
 from mem0.embeddings.configs import EmbedderConfig
 from mem0.llms.configs import LlmConfig
+from mem0.utils.paths import resolve_mem0_dir
 from mem0.vector_stores.configs import VectorStoreConfig
 
 # Set up the directory path
-home_dir = os.path.expanduser("~")
-mem0_dir = os.environ.get("MEM0_DIR") or os.path.join(home_dir, ".mem0")
+mem0_dir = str(resolve_mem0_dir())
 
 
 class MemoryItem(BaseModel):
