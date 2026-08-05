@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from evaluation_overlay.state_benchmark import RestClient, main, memora_cases, run_case, stale_cases
 
 
@@ -149,6 +151,29 @@ def test_stale_run_reports_false_supersession_from_current_evidence_status():
     )
 
     assert observations[0]["false_supersession"] is True
+
+
+def test_run_case_rejects_empty_add_results_for_nonempty_session():
+    class Client:
+        def clear_user(self, user_id):
+            return None
+
+        def add(self, user_id, messages):
+            return [], 1.0
+
+    with pytest.raises(RuntimeError, match="persisted no memories"):
+        run_case(
+            Client(),
+            {
+                "case_id": "c1",
+                "sessions": [[{"role": "user", "content": "current state"}]],
+                "queries": [],
+                "current_session_ids": {0},
+            },
+            store_id="test",
+            benchmark="stale",
+            top_k=10,
+        )
 
 
 def test_rest_client_accepts_legacy_list_add_envelope(monkeypatch):

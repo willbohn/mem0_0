@@ -99,7 +99,7 @@ def memora_cases(dataset_dir: Path) -> Iterable[dict[str, Any]]:
 
 
 class RestClient:
-    def __init__(self, host: str, api_key: str | None = None, timeout: float = 660):
+    def __init__(self, host: str, api_key: str | None = None, timeout: float = 1200):
         self.host = host.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -173,6 +173,19 @@ def run_case(
         session_id = int(case.get("session_ids", [])[offset]) if case.get("session_ids") else offset
         ids_by_session[session_id] = set(memory_ids)
 
+    labeled_session_ids = set(case.get("current_session_ids", set())) | set(case.get("stale_session_ids", set()))
+    for query in case["queries"]:
+        labeled_session_ids.update(query.get("current_session_ids", set()))
+        labeled_session_ids.update(query.get("stale_session_ids", set()))
+    missing_labeled_sessions = sorted(
+        int(session_id) for session_id in labeled_session_ids if not ids_by_session.get(int(session_id))
+    )
+    if missing_labeled_sessions:
+        raise RuntimeError(
+            "Benchmark labeled session persisted no memories: "
+            + ", ".join(str(session_id) for session_id in missing_labeled_sessions)
+        )
+
     observations = []
     for query_index, query in enumerate(case["queries"]):
         current_sessions = query.get("current_session_ids", case.get("current_session_ids", set()))
@@ -235,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top-k", type=int, default=200)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--request-timeout-seconds", type=float, default=660)
+    parser.add_argument("--request-timeout-seconds", type=float, default=1200)
     args = parser.parse_args(argv)
 
     if args.format == "stale":

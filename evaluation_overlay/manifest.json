@@ -233,11 +233,11 @@
   "budgets": {
     "max_workers": 1,
     "provider_max_retries": 0,
-    "request_timeout_seconds": 660,
+    "request_timeout_seconds": 1200,
     "seed": 42,
     "top_k": 200,
     "top_k_cutoffs": [10, 20, 50, 200],
-    "write_max_tokens": 256
+    "write_max_tokens": 1024
   },
   "gates": {
     "answer_accuracy": {"delta_min": -0.01},

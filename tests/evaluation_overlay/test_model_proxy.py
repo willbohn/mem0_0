@@ -1,5 +1,7 @@
 import hashlib
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from evaluation_overlay.model_proxy import (
     build_proxy_attestation,
     parse_runtime_placement,
     prepare_upstream_body,
+    wait_for_runtime_placement,
     validate_proxy_config,
 )
 
@@ -167,6 +170,51 @@ def test_runtime_placement_uses_resolved_device_and_complete_offload_evidence():
             config,
             "using device Vulkan0 (Example GPU) - 1024 MiB free\nload_tensors: offloaded 24/25 layers to GPU\n",
         )
+
+
+def test_runtime_placement_waits_for_launcher_log_after_endpoint_readiness(tmp_path):
+    config = ModelProxyConfig(
+        api_key="local-key",
+        artifact_path=Path("/tmp/model.gguf"),
+        artifact_sha256="b" * 64,
+        device="Vulkan0",
+        enable_thinking=False,
+        gpu_layers="all",
+        launcher_sha256="c" * 64,
+        listen_host="127.0.0.1",
+        listen_port=18000,
+        model_id="example/model",
+        offloaded_layers=None,
+        receipt_sha256="a" * 64,
+        resolved_device=None,
+        total_layers=None,
+        upstream="http://127.0.0.1:18100/v1",
+    )
+    log_path = tmp_path / "llama-server.log"
+    log_path.write_text("")
+
+    class RunningProcess:
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    def write_placement_evidence():
+        time.sleep(0.05)
+        log_path.write_text(
+            "using device Vulkan0 (Example GPU) - 1024 MiB free\n"
+            "load_tensors: offloaded 25/25 layers to GPU\n"
+        )
+
+    writer = threading.Thread(target=write_placement_evidence)
+    writer.start()
+    try:
+        placement = wait_for_runtime_placement(config, RunningProcess(), log_path, timeout=1)
+    finally:
+        writer.join()
+
+    assert placement == {"offloaded_layers": 25, "resolved_device": "Vulkan0", "total_layers": 25}
 
 
 @pytest.mark.parametrize(

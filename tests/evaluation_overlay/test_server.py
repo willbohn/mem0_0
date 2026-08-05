@@ -39,6 +39,8 @@ def test_arm_config_expands_local_endpoints_and_isolates_collection_and_history(
     assert legacy["recall"] == {"mode": "legacy"}
     assert candidate["llm"]["config"]["openai_base_url"] == "http://127.0.0.1:18000/v1"
     assert candidate["llm"]["config"]["max_tokens"] == manifest["budgets"]["write_max_tokens"]
+    assert manifest["budgets"]["write_max_tokens"] == 1024
+    assert manifest["budgets"]["request_timeout_seconds"] == 1200
     assert candidate["embedder"]["config"]["openai_base_url"] == "http://127.0.0.1:18001/v1"
     assert candidate["vector_store"]["config"]["collection_name"] != legacy["vector_store"]["config"]["collection_name"]
     assert candidate["history_db_path"] != legacy["history_db_path"]

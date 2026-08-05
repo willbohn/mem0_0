@@ -176,6 +176,31 @@ def parse_runtime_placement(config: ModelProxyConfig, log_text: str) -> dict[str
     }
 
 
+def wait_for_runtime_placement(
+    config: ModelProxyConfig,
+    process: subprocess.Popen[bytes],
+    log_path: Path,
+    timeout: float = 30,
+) -> dict[str, Any]:
+    """Wait for the launcher log to contain complete placement evidence.
+
+    The model endpoint can become ready before the launcher has flushed its
+    startup diagnostics. Placement attestation therefore has its own bounded
+    wait instead of racing the first successful ``/models`` response.
+    """
+    deadline = time.monotonic() + timeout
+    last_error: RuntimeError | None = None
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"llama-server exited before placement attestation with status {process.returncode}")
+        try:
+            return parse_runtime_placement(config, log_path.read_text(encoding="utf-8", errors="replace"))
+        except RuntimeError as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise RuntimeError("llama-server did not report complete runtime placement before timeout") from last_error
+
+
 def validate_runtime_placement(config: ModelProxyConfig) -> None:
     if (
         config.resolved_device != config.device
@@ -400,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         _wait_for_upstream(config, process)
-        placement = parse_runtime_placement(config, log_path.read_text(encoding="utf-8", errors="replace"))
+        placement = wait_for_runtime_placement(config, process, log_path)
         config = replace(config, **placement)
         key_file_path.unlink(missing_ok=True)
         server = create_server(config)

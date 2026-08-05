@@ -6,7 +6,7 @@
     "config": {
       "api_key": "${MEM0_BENCH_LOCAL_API_KEY}",
       "model": "prism-ml/Bonsai-27B-gguf",
-      "max_tokens": 256,
+      "max_tokens": 1024,
       "openai_base_url": "${MEM0_BENCH_LLM_BASE_URL}",
       "temperature": 0
     }
