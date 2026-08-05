@@ -44,3 +44,9 @@ def test_container_build_does_not_copy_ignored_server_secrets():
     ignorefile = (ROOT / "containerignore").read_text(encoding="utf-8")
     assert "**/.env" in ignorefile
     assert "**/__pycache__/" in ignorefile
+
+
+def test_container_build_installs_a_runnable_postgres_driver():
+    containerfile = (ROOT / "Containerfile").read_text(encoding="utf-8")
+
+    assert "psycopg[binary]" in containerfile

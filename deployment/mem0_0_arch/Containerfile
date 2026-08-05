@@ -13,7 +13,8 @@ COPY mem0 /src/mem0
 COPY server/requirements.txt /tmp/server-requirements.txt
 RUN sed '/^mem0ai[<>=]/d' /tmp/server-requirements.txt > /tmp/server-requirements-without-mem0.txt \
     && pip install --no-cache-dir /src \
-    && pip install --no-cache-dir -r /tmp/server-requirements-without-mem0.txt
+    && pip install --no-cache-dir -r /tmp/server-requirements-without-mem0.txt \
+    && pip install --no-cache-dir 'psycopg[binary]>=3.2.8'
 
 COPY server/*.py server/alembic.ini /app/
 COPY server/alembic /app/alembic
