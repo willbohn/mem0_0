@@ -469,6 +469,7 @@ def test_openai_llm_preserves_proxies_from_base_config(mock_openai_client):
 @pytest.mark.parametrize("compat_value", ["1", "true", "TRUE", "yes", "on"])
 def test_lmstudio_compat_converts_json_object_to_text(mock_openai_client, monkeypatch, compat_value):
     monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", compat_value)
+    monkeypatch.delenv("MEM0_LMSTUDIO_REASONING_EFFORT", raising=False)
     llm = OpenAILLM(OpenAIConfig(model="local-model"))
     messages = [{"role": "user", "content": "Return JSON"}]
     mock_response = Mock()
@@ -479,10 +480,36 @@ def test_lmstudio_compat_converts_json_object_to_text(mock_openai_client, monkey
 
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["response_format"] == {"type": "text"}
+    assert call_kwargs["reasoning_effort"] == "none"
+
+
+def test_lmstudio_compat_accepts_an_explicit_bounded_reasoning_effort(mock_openai_client, monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_REASONING_EFFORT", "low")
+    llm = OpenAILLM(OpenAIConfig(model="local-model"))
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"ok":true}'))]
+    )
+
+    llm.generate_response([{"role": "user", "content": "Return JSON"}])
+
+    assert mock_openai_client.chat.completions.create.call_args.kwargs["reasoning_effort"] == "low"
+
+
+def test_lmstudio_compat_rejects_an_unbounded_reasoning_effort(mock_openai_client, monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_REASONING_EFFORT", "unbounded")
+    llm = OpenAILLM(OpenAIConfig(model="local-model"))
+
+    with pytest.raises(ValueError, match="MEM0_LMSTUDIO_REASONING_EFFORT"):
+        llm.generate_response([{"role": "user", "content": "Return JSON"}])
+
+    mock_openai_client.chat.completions.create.assert_not_called()
 
 
 def test_lmstudio_compat_disabled_preserves_json_object(mock_openai_client, monkeypatch):
     monkeypatch.delenv("MEM0_LMSTUDIO_COMPAT", raising=False)
+    monkeypatch.setenv("MEM0_LMSTUDIO_REASONING_EFFORT", "none")
     llm = OpenAILLM(OpenAIConfig(model="gpt-4.1"))
     messages = [{"role": "user", "content": "Return JSON"}]
     mock_response = Mock()
@@ -494,6 +521,7 @@ def test_lmstudio_compat_disabled_preserves_json_object(mock_openai_client, monk
 
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["response_format"] == response_format
+    assert "reasoning_effort" not in call_kwargs
 
 
 def test_lmstudio_compat_preserves_non_json_object_formats(mock_openai_client, monkeypatch):

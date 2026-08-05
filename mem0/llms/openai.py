@@ -104,6 +104,12 @@ class OpenAILLM(LLMBase):
             json: The generated response.
         """
         params = self._get_supported_params(messages=messages, **kwargs)
+        lmstudio_compat = os.getenv("MEM0_LMSTUDIO_COMPAT", "").lower() in {"1", "true", "yes", "on"}
+        if lmstudio_compat:
+            reasoning_effort = os.getenv("MEM0_LMSTUDIO_REASONING_EFFORT", "none").lower()
+            if reasoning_effort not in {"none", "low", "medium", "high"}:
+                raise ValueError("MEM0_LMSTUDIO_REASONING_EFFORT must be one of: none, low, medium, high")
+            params["reasoning_effort"] = reasoning_effort
         
         params.update({
             "model": self.config.model,
@@ -138,11 +144,7 @@ class OpenAILLM(LLMBase):
             # ``json_schema`` but rejects OpenAI's legacy ``json_object``.
             # Keep the compatibility switch explicit so normal OpenAI users
             # retain the upstream request shape.
-            if (
-                os.getenv("MEM0_LMSTUDIO_COMPAT", "").lower() in {"1", "true", "yes", "on"}
-                and isinstance(response_format, dict)
-                and response_format.get("type") == "json_object"
-            ):
+            if lmstudio_compat and isinstance(response_format, dict) and response_format.get("type") == "json_object":
                 params["response_format"] = {"type": "text"}
             else:
                 params["response_format"] = response_format

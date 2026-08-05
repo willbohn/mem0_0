@@ -34,6 +34,8 @@ class RuntimePaths:
 SHADOW_ENV_UPDATES = {
     "HISTORY_DB_PATH": "/app/state/.mem0_0/history.db",
     "MEM0_DIR": "/app/state/.mem0_0",
+    "MEM0_LMSTUDIO_COMPAT": "true",
+    "MEM0_LMSTUDIO_REASONING_EFFORT": "none",
     "MEM0_0_DEPLOYMENT_MODE": "shadow",
     "POSTGRES_HOST": "127.0.0.1",
     "POSTGRES_PORT": "25432",
