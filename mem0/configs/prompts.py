@@ -954,6 +954,30 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 """
 
 
+COMPACT_ADDITIVE_EXTRACTION_PROMPT = """
+You are an evidence-bound memory extractor. Read only New Messages as factual source material. Use Summary,
+Last k Messages, Recently Extracted Memories, and Existing Memories only to resolve context, avoid duplicates,
+and link related existing IDs. Never extract from system messages or invent an unsupported detail.
+
+Return only valid JSON with this shape: {"memory": [{...}]}. If nothing is memorable, return {"memory": []}.
+Each memory object must contain:
+- "id": sequential string starting at "0"
+- "text": concise, self-contained fact supported by the source
+- "kind": exactly one of "state", "preference", "event", "plan", "relationship", "instruction", "procedure"
+- "subject": normalized entity the fact is about
+- "predicate": stable attribute or relation
+- "value": explicit value asserted by the source
+- "attributed_to": "user" or "assistant"
+- "evidence": {"message_index": integer, "excerpt": exact substring of that indexed non-system New Message}
+
+Optional fields are "valid_from", "valid_to", "linked_memory_ids", and "relation". Use "corroborates" only
+when an existing memory has the same subject, predicate, and value. Use "supersedes" only for an explicit new
+value replacing an old value. Use "conflicts_with" when the evidence is contradictory or ambiguous. Events and
+independent preferences do not supersede each other merely because they are newer or similar. Linked IDs must
+come verbatim from Existing Memories. Omit uncertain facts. Do not include reasoning, markdown, or extra keys.
+"""
+
+
 AGENT_CONTEXT_SUFFIX = """
 
 ## Entity Context

@@ -178,6 +178,36 @@ def test_extraction_prompt_preserves_indexed_source_messages():
     assert "invent Osaka" not in prompt_messages[1]["content"]
 
 
+def test_lmstudio_compact_prompt_keeps_evidence_and_lifecycle_contract(monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPACT_PROMPT", "true")
+    memory = make_memory([extraction("User lives in Tokyo", "Tokyo")])
+
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "I live in Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    system_prompt = memory.llm.generate_response.call_args.kwargs["messages"][0]["content"]
+    assert len(system_prompt) < 4_000
+    for required in (
+        "exact substring",
+        "message_index",
+        "state",
+        "preference",
+        "event",
+        "subject",
+        "predicate",
+        "value",
+        "supersedes",
+        "conflicts_with",
+        "corroborates",
+        '"memory"',
+    ):
+        assert required in system_prompt
+
+
 def test_same_state_and_value_corroborates_even_when_text_hash_matches():
     text = "User lives in Tokyo"
     old = SimpleNamespace(

@@ -19,6 +19,7 @@ from mem0.configs.enums import MemoryType
 from mem0.configs.prompts import (
     ADDITIVE_EXTRACTION_PROMPT,
     AGENT_CONTEXT_SUFFIX,
+    COMPACT_ADDITIVE_EXTRACTION_PROMPT,
     PROCEDURAL_MEMORY_SYSTEM_PROMPT,
     generate_additive_extraction_prompt,
 )
@@ -85,6 +86,14 @@ from mem0.utils.scoring import (
     score_and_rank,
 )
 from mem0.vector_stores.base import VectorStoreBase
+
+
+def _additive_extraction_system_prompt(*, is_agent_scoped: bool) -> str:
+    use_compact = os.getenv("MEM0_LMSTUDIO_COMPACT_PROMPT", "").lower() in {"1", "true", "yes", "on"}
+    prompt = COMPACT_ADDITIVE_EXTRACTION_PROMPT if use_compact else ADDITIVE_EXTRACTION_PROMPT
+    if is_agent_scoped:
+        prompt += AGENT_CONTEXT_SUFFIX
+    return prompt
 
 # Suppress SWIG deprecation warnings globally
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*SwigPy.*")
@@ -1208,9 +1217,7 @@ class Memory(MemoryBase):
 
         # Phase 2: LLM extraction (single call)
         is_agent_scoped = bool(filters.get("agent_id")) and not filters.get("user_id")
-        system_prompt = ADDITIVE_EXTRACTION_PROMPT
-        if is_agent_scoped:
-            system_prompt += AGENT_CONTEXT_SUFFIX
+        system_prompt = _additive_extraction_system_prompt(is_agent_scoped=is_agent_scoped)
 
         custom_instr = prompt or self.custom_instructions
 
@@ -3355,9 +3362,7 @@ class AsyncMemory(MemoryBase):
 
         # Phase 2: LLM extraction (single call)
         is_agent_scoped = bool(effective_filters.get("agent_id")) and not effective_filters.get("user_id")
-        system_prompt = ADDITIVE_EXTRACTION_PROMPT
-        if is_agent_scoped:
-            system_prompt += AGENT_CONTEXT_SUFFIX
+        system_prompt = _additive_extraction_system_prompt(is_agent_scoped=is_agent_scoped)
 
         custom_instr = prompt or self.custom_instructions
 
