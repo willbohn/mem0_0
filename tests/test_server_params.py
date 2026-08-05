@@ -44,7 +44,10 @@ def _mock_memory():
     mock_instance.delete_all.return_value = {"message": "Memories deleted"}
     mock_instance.reset.return_value = None
 
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake-key", "ADMIN_API_KEY": ""}):
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "fake-key", "ADMIN_API_KEY": "", "AUTH_DISABLED": "true"},
+    ):
         with patch("mem0.Memory.from_config", return_value=mock_instance):
             yield mock_instance
 
@@ -53,13 +56,14 @@ def _mock_memory():
 def client(_mock_memory, monkeypatch):
     """Return a TestClient wired to the server app with mocked Memory."""
     import server.main as server_main
-    with patch.dict(os.environ, {"ADMIN_API_KEY": ""}):
+    with patch.dict(os.environ, {"ADMIN_API_KEY": "", "AUTH_DISABLED": "true"}):
         importlib.reload(server_main)
     monkeypatch.setattr(
         server_main,
         "_provider_status",
         lambda: {"status": "ready", "code": "ready", "message": "Provider is ready."},
     )
+    monkeypatch.setattr(server_main, "_should_log_request", lambda _request: False)
     server_main.app.dependency_overrides[server_main.require_admin] = lambda: SimpleNamespace(role="admin")
     return TestClient(server_main.app)
 

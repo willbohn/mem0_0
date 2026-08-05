@@ -20,6 +20,9 @@ class BackupVerificationError(RuntimeError):
     """Raised when backup, restore, or content-free reconciliation cannot be proven."""
 
 
+LEGACY_APP_WRITER_CONTAINER = "mem0-arch-mem0-1"
+
+
 class Runner(Protocol):
     def run(self, command: Sequence[str], **kwargs: Any) -> bytes: ...
 
@@ -150,7 +153,8 @@ def verify_backup_receipt(receipt_path: Path) -> dict[str, Any]:
         receipt.get("source_tree_sha256"), 64
     ):
         raise BackupVerificationError("backup receipt has no exact source attestation")
-    if receipt.get("cross_store_consistency") not in {
+    consistency = receipt.get("cross_store_consistency")
+    if consistency not in {
         "verified",
         "not_proven",
         "legacy_postgres_with_current_sqlite_unverified",
@@ -180,6 +184,27 @@ def verify_backup_receipt(receipt_path: Path) -> dict[str, Any]:
             or not _is_lower_hex(table.get("content_sha256"), 64)
         ):
             raise BackupVerificationError("backup receipt contains invalid SQLite inventory")
+    if consistency == "verified":
+        quiescence = receipt.get("quiescence")
+        if (
+            not isinstance(quiescence, dict)
+            or set(quiescence)
+            != {
+                "method",
+                "writer_container",
+                "pause_succeeded",
+                "unpause_succeeded",
+                "pre_backup",
+                "post_backup",
+            }
+            or quiescence.get("method") != "podman_pause"
+            or quiescence.get("writer_container") != LEGACY_APP_WRITER_CONTAINER
+            or quiescence.get("pause_succeeded") is not True
+            or quiescence.get("unpause_succeeded") is not True
+            or quiescence.get("pre_backup") != source
+            or quiescence.get("post_backup") != source
+        ):
+            raise BackupVerificationError("verified backup receipt has no valid quiescence evidence")
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, dict) or set(artifacts) != {"postgres", "sqlite"}:
         raise BackupVerificationError("backup receipt must describe PostgreSQL and SQLite artifacts")
@@ -283,11 +308,14 @@ def create_encrypted_backup(
     paths: RuntimePaths,
     *,
     legacy_postgres_container: str,
+    legacy_writer_container: str | None = None,
     source_repository: Path,
     runner: Runner | None = None,
     timestamp: str | None = None,
 ) -> Path:
     runner = runner or CommandRunner()
+    if legacy_writer_container is not None and legacy_writer_container != LEGACY_APP_WRITER_CONTAINER:
+        raise MigrationConflictError("quiescence target must be the exact legacy app writer container")
     source = source_attestation(source_repository)
     backup_dir = paths.target_state / "backups"
     if not backup_dir.is_dir():
@@ -308,16 +336,21 @@ def create_encrypted_backup(
         raise MigrationConflictError("backup target already exists")
 
     source_sqlite = paths.legacy_state / "history" / "history.db"
-    source_inventory = {
-        "postgres": postgres_inventory(runner, legacy_postgres_container, 15432),
-        "sqlite": sqlite_inventory(source_sqlite),
-    }
     postgres_temporary = postgres_output.with_name(f".{postgres_output.name}.tmp")
     sqlite_temporary = sqlite_output.with_name(f".{sqlite_output.name}.tmp")
     with tempfile.NamedTemporaryFile(dir=backup_dir, prefix=".history.", suffix=".sqlite", delete=False) as handle:
         plaintext_sqlite = Path(handle.name)
     plaintext_sqlite.unlink()
+    writer_paused = False
+    post_inventory: dict[str, Any] | None = None
     try:
+        if legacy_writer_container is not None:
+            runner.run(["podman", "pause", legacy_writer_container])
+            writer_paused = True
+        source_inventory = {
+            "postgres": postgres_inventory(runner, legacy_postgres_container, 15432),
+            "sqlite": sqlite_inventory(source_sqlite),
+        }
         runner.pipeline(
             [
                 [
@@ -347,6 +380,13 @@ def create_encrypted_backup(
             temporary.chmod(0o600)
         os.replace(postgres_temporary, postgres_output)
         os.replace(sqlite_temporary, sqlite_output)
+        if legacy_writer_container is not None:
+            post_inventory = {
+                "postgres": postgres_inventory(runner, legacy_postgres_container, 15432),
+                "sqlite": sqlite_inventory(source_sqlite),
+            }
+            compare_inventories(source_inventory["postgres"], post_inventory["postgres"], label="PostgreSQL")
+            compare_inventories(source_inventory["sqlite"], post_inventory["sqlite"], label="SQLite")
         if source_attestation(source_repository) != source:
             raise BackupVerificationError("source tree changed while backup evidence was being created")
     except Exception:
@@ -357,22 +397,45 @@ def create_encrypted_backup(
         plaintext_sqlite.unlink(missing_ok=True)
         postgres_temporary.unlink(missing_ok=True)
         sqlite_temporary.unlink(missing_ok=True)
+        if writer_paused:
+            try:
+                runner.run(["podman", "unpause", legacy_writer_container])
+            except Exception:
+                postgres_output.unlink(missing_ok=True)
+                sqlite_output.unlink(missing_ok=True)
+                receipt_path.unlink(missing_ok=True)
+                raise
 
-    receipt = {
-        "schema_version": 1,
-        "created_at": stamp,
-        "source_revision": source["revision"],
-        "source_tree_sha256": source["source_tree_sha256"],
-        "cross_store_consistency": "not_proven",
-        "recipient_sha256": hashlib.sha256(recipient.encode()).hexdigest(),
-        "source": source_inventory,
-        "artifacts": {
-            "postgres": {"path": postgres_output.name, "sha256": _sha256_file(postgres_output)},
-            "sqlite": {"path": sqlite_output.name, "sha256": _sha256_file(sqlite_output)},
-        },
-    }
-    _atomic_json(receipt_path, receipt)
-    verify_backup_receipt(receipt_path)
+    try:
+        receipt = {
+            "schema_version": 1,
+            "created_at": stamp,
+            "source_revision": source["revision"],
+            "source_tree_sha256": source["source_tree_sha256"],
+            "cross_store_consistency": "verified" if legacy_writer_container is not None else "not_proven",
+            "recipient_sha256": hashlib.sha256(recipient.encode()).hexdigest(),
+            "source": source_inventory,
+            "artifacts": {
+                "postgres": {"path": postgres_output.name, "sha256": _sha256_file(postgres_output)},
+                "sqlite": {"path": sqlite_output.name, "sha256": _sha256_file(sqlite_output)},
+            },
+        }
+        if legacy_writer_container is not None:
+            receipt["quiescence"] = {
+                "method": "podman_pause",
+                "writer_container": legacy_writer_container,
+                "pause_succeeded": True,
+                "unpause_succeeded": True,
+                "pre_backup": source_inventory,
+                "post_backup": post_inventory,
+            }
+        _atomic_json(receipt_path, receipt)
+        verify_backup_receipt(receipt_path)
+    except Exception:
+        postgres_output.unlink(missing_ok=True)
+        sqlite_output.unlink(missing_ok=True)
+        receipt_path.unlink(missing_ok=True)
+        raise
     return receipt_path
 
 
@@ -525,6 +588,11 @@ def main(argv: list[str] | None = None) -> int:
     backup = subparsers.add_parser("backup")
     backup.add_argument("--home", type=Path, default=Path.home())
     backup.add_argument("--legacy-container", default="mem0-arch-postgres-1")
+    backup.add_argument(
+        "--quiesce-legacy-writer",
+        metavar="CONTAINER",
+        help=f"Pause the exact legacy app writer ({LEGACY_APP_WRITER_CONTAINER}) while proving both stores stable",
+    )
     backup.add_argument("--source-repository", type=Path, required=True)
     restore = subparsers.add_parser("restore-shadow")
     restore.add_argument("receipt", type=Path)
@@ -542,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
         receipt = create_encrypted_backup(
             paths,
             legacy_postgres_container=args.legacy_container,
+            legacy_writer_container=args.quiesce_legacy_writer,
             source_repository=args.source_repository,
         )
         print(json.dumps({"status": "verified", "receipt": str(receipt)}, sort_keys=True))

@@ -13,6 +13,8 @@ This directory moves ownership of the existing local deployment from `mem0-imple
 
 Existing Python callers keep importing `mem0`, packages keep the `mem0ai` distribution name, REST paths and `MEM0_*` variables remain compatible, and MCP tools keep their current names. For direct Python use, an explicit `MEM0_DIR` still wins. A fresh install now chooses `~/.mem0_0`; when only `~/.mem0` exists, the SDK keeps using it until this explicit migration is performed.
 
+The REST process keeps liveness separate from local-model readiness. `GET /health` remains HTTP 200 and includes a credential-safe provider summary; `GET /ready` is HTTP 200 only when the configured OpenAI-compatible endpoint advertises both configured models. Provider-dependent add, search, update, and instruction-generation requests fail fast with a bounded HTTP 503 code while read, audit, consolidation, feedback, and deletion remain available. Set `MEM0_LMSTUDIO_COMPAT=true` for LM Studio's text response-format compatibility and native loaded-model check. `MEM0_REQUIRE_LOADED_MODELS=false` preserves just-in-time model loading by default.
+
 ## Safety contract
 
 - All commands default to planning or content-free inspection.
@@ -81,6 +83,20 @@ python -m deployment.mem0_0_arch.backup_restore backup \
   --source-repository /home/will/Documents/CodingWorkspaces/mem0-implement/vendor/mem0
 ```
 
+Without an explicit writer-quiescence option, this preserves the existing behavior and records `cross_store_consistency=not_proven`. Use that mode for exploratory snapshots, not final cutover evidence.
+
+For the final matched snapshot, explicitly name the only accepted legacy app writer container:
+
+```bash
+python -m deployment.mem0_0_arch.backup_restore backup \
+  --home /home/will \
+  --legacy-container mem0-arch-postgres-1 \
+  --quiesce-legacy-writer mem0-arch-mem0-1 \
+  --source-repository /home/will/Documents/CodingWorkspaces/mem0-implement/vendor/mem0
+```
+
+This pauses only `mem0-arch-mem0-1`, inventories PostgreSQL and SQLite, backs up both stores, inventories them again while the writer remains paused, and requires the pre/post counts and complete-row digests to match. The tool always attempts to unpause after a successful pause. It writes a `cross_store_consistency=verified` receipt only after unpause succeeds; any backup, reconciliation, or unpause failure removes the new artifacts and emits no receipt. The receipt contains the exact writer name, pause method, success booleans, and content-free pre/post inventories—never stored bodies or command output. Any other writer-container name is rejected before Podman is called.
+
 Restore only into the isolated shadow container. The command rejects a non-empty memory table or an existing target history DB, verifies ciphertext hashes before decryption, and reconciles both stores afterward:
 
 ```bash
@@ -116,6 +132,16 @@ python -m deployment.mem0_0_arch.readiness --home /home/will --wait-seconds 120
 ```
 
 Readiness checks the private-file modes, isolated PostgreSQL, and the API OpenAPI document. It does not read or print stored memory content. The deeper scoped add/correction/current/historical/audit/consolidation/feedback/delete exercise belongs to the later shadow-verification gate; deployed legacy rows remain read-only during it.
+
+After readiness passes and the local model provider is ready, run that scoped REST gate with the private admin key file:
+
+```bash
+python -m deployment.mem0_0_arch.live_verify \
+  --api-url http://127.0.0.1:28889 \
+  --api-key-file /home/will/.config/mem0_0-arch/bridge-api-key
+```
+
+The verifier prints only aggregate counts, booleans, and timings. It creates a unique five-field synthetic scope, never calls `delete_all`, and attempts exact-ID cleanup of only records rediscovered inside that scope even when an earlier check fails.
 
 ## 5. Bridge compatibility
 
