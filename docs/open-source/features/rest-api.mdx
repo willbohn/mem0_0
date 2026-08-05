@@ -234,11 +234,40 @@ curl -X POST http://localhost:8888/search \
   -d '{
     "query": "vegetable pizza",
     "user_id": "alice",
-    "explain": true
+    "explain": true,
+    "rerank": true,
+    "max_chars": 4000
   }'
 ```
 
-Each returned memory includes `score_details` only when explanation mode is enabled.
+Each returned memory includes `score_details` only when explanation mode is enabled. `max_chars` applies a
+deterministic result-text budget after state filtering, ranking, and deduplication. In the default state-aware recall
+mode, current-state searches suppress superseded memories; explicitly historical queries may retrieve earlier versions.
+
+### Audit and maintain memory quality
+
+Quality operations require admin authentication and an explicit identity scope. Audits are read-only and content-free.
+Consolidation defaults to a dry run, and the `safe` strategy only applies deterministic, reversible lifecycle changes—it
+never hard-deletes data.
+
+```bash
+curl -X POST http://localhost:8888/memories/audit \
+  -H "Content-Type: application/json" \
+  -d '{"filters": {"user_id": "alice"}, "limit": 1000}'
+
+curl -X POST http://localhost:8888/memories/consolidate \
+  -H "Content-Type: application/json" \
+  -d '{"filters": {"user_id": "alice"}, "dry_run": true, "strategy": "safe"}'
+```
+
+Explicit feedback can suppress a stale or incorrect memory from current recall. `helpful` changes salience only and
+does not increase factual confidence.
+
+```bash
+curl -X POST http://localhost:8888/memories/MEMORY_ID/feedback \
+  -H "Content-Type: application/json" \
+  -d '{"signal": "stale", "replacement_id": "OPTIONAL_REPLACEMENT_ID"}'
+```
 
 ### Explore with OpenAPI docs
 
@@ -265,7 +294,10 @@ The OSS REST server exposes the following endpoints. None use the `/v1/` prefix.
 | `GET` | `/configure/providers` | List the LLM and embedder providers bundled in the container |
 | `POST` | `/memories` | Create memories |
 | `GET` | `/memories` | Get all memories (filter by `user_id`, `agent_id`, or `run_id`) |
+| `POST` | `/memories/audit` | Report scoped duplicates, stale chains, disputes, legacy grounding, expiry, and link issues |
+| `POST` | `/memories/consolidate` | Preview or apply safe, reversible scoped maintenance |
 | `GET` | `/memories/{memory_id}` | Get a specific memory |
+| `POST` | `/memories/{memory_id}/feedback` | Record `helpful`, `irrelevant`, `stale`, or `incorrect` feedback |
 | `PUT` | `/memories/{memory_id}` | Update a memory |
 | `DELETE` | `/memories/{memory_id}` | Delete a specific memory |
 | `DELETE` | `/memories` | Delete all memories for an identifier |

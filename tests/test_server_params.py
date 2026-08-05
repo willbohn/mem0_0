@@ -33,6 +33,13 @@ def _mock_memory():
     mock_instance.get_all.return_value = [{"id": "mem-1", "memory": "test memory"}]
     mock_instance.update.return_value = {"message": "Memory updated"}
     mock_instance.history.return_value = [{"id": "mem-1", "old_memory": "a", "new_memory": "b"}]
+    mock_instance.audit.return_value = {"summary": {"total": 1}, "issues": []}
+    mock_instance.consolidate.return_value = {"dry_run": True, "strategy": "safe", "actions": []}
+    mock_instance.feedback.return_value = {
+        "message": "Feedback recorded successfully!",
+        "memory_id": "mem-1",
+        "signal": "helpful",
+    }
     mock_instance.delete.return_value = None
     mock_instance.delete_all.return_value = {"message": "Memories deleted"}
     mock_instance.reset.return_value = None
@@ -48,6 +55,7 @@ def client(_mock_memory):
     import server.main as server_main
     with patch.dict(os.environ, {"ADMIN_API_KEY": ""}):
         importlib.reload(server_main)
+    server_main.app.dependency_overrides[server_main.require_admin] = lambda: SimpleNamespace(role="admin")
     return TestClient(server_main.app)
 
 
@@ -135,6 +143,27 @@ class TestSearchExplain:
         assert resp.status_code == 200
         _, kwargs = mock_memory.search.call_args
         assert "explain" not in kwargs
+
+
+class TestSearchStateAwareParameters:
+    def test_rerank_and_max_chars_are_forwarded(self, client, mock_memory):
+        resp = client.post(
+            "/search",
+            json={"query": "food", "user_id": "u1", "rerank": True, "max_chars": 512},
+        )
+
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.search.call_args
+        assert kwargs["rerank"] is True
+        assert kwargs["max_chars"] == 512
+
+    def test_omitted_state_aware_parameters_use_memory_defaults(self, client, mock_memory):
+        resp = client.post("/search", json={"query": "food", "user_id": "u1"})
+
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.search.call_args
+        assert "rerank" not in kwargs
+        assert "max_chars" not in kwargs
 
 
 # ===========================================================================
@@ -369,6 +398,18 @@ class TestOpenAPISchema:
         schema = client.get("/openapi.json").json()
         search_props = schema["components"]["schemas"]["SearchRequest"]["properties"]
         assert "threshold" in search_props
+
+    def test_search_schema_includes_state_aware_parameters(self, client):
+        schema = client.get("/openapi.json").json()
+        search_props = schema["components"]["schemas"]["SearchRequest"]["properties"]
+        assert "rerank" in search_props
+        assert "max_chars" in search_props
+
+    def test_quality_operation_routes_are_documented(self, client):
+        paths = client.get("/openapi.json").json()["paths"]
+        assert "post" in paths["/memories/audit"]
+        assert "post" in paths["/memories/consolidate"]
+        assert "post" in paths["/memories/{memory_id}/feedback"]
 
     def test_add_schema_includes_infer(self, client):
         schema = client.get("/openapi.json").json()
@@ -814,3 +855,76 @@ class TestWriteHandlerErrorMapping:
             "messages": [{"role": "user", "content": "hi"}], "user_id": "u1",
         })
         assert resp.status_code == 502
+
+
+class TestMemoryQualityOperations:
+    def test_audit_forwards_filters_and_limit(self, client, mock_memory):
+        response = client.post(
+            "/memories/audit",
+            json={"filters": {"user_id": "u1", "project_id": "p1"}, "limit": 250},
+        )
+
+        assert response.status_code == 200
+        mock_memory.audit.assert_called_once_with({"user_id": "u1", "project_id": "p1"}, limit=250)
+        assert response.json()["summary"]["total"] == 1
+
+    def test_consolidate_defaults_to_safe_dry_run(self, client, mock_memory):
+        response = client.post("/memories/consolidate", json={"filters": {"user_id": "u1"}})
+
+        assert response.status_code == 200
+        mock_memory.consolidate.assert_called_once_with(
+            {"user_id": "u1"}, dry_run=True, strategy="safe", limit=1000
+        )
+
+    def test_consolidate_apply_is_forwarded_explicitly(self, client, mock_memory):
+        mock_memory.consolidate.return_value = {
+            "dry_run": False,
+            "strategy": "safe",
+            "actions": [],
+            "applied": 0,
+        }
+        response = client.post(
+            "/memories/consolidate",
+            json={"filters": {"agent_id": "a1"}, "dry_run": False, "strategy": "safe", "limit": 50},
+        )
+
+        assert response.status_code == 200
+        mock_memory.consolidate.assert_called_once_with(
+            {"agent_id": "a1"}, dry_run=False, strategy="safe", limit=50
+        )
+
+    def test_feedback_forwards_signal_and_optional_replacement(self, client, mock_memory):
+        response = client.post(
+            "/memories/mem-1/feedback",
+            json={"signal": "stale", "replacement_id": "mem-2"},
+        )
+
+        assert response.status_code == 200
+        mock_memory.feedback.assert_called_once_with("mem-1", signal="stale", replacement_id="mem-2")
+
+    def test_quality_validation_errors_are_client_errors(self, client, mock_memory):
+        mock_memory.audit.side_effect = ValueError("filters must contain at least one of: user_id, agent_id, run_id")
+
+        response = client.post("/memories/audit", json={"filters": {}})
+
+        assert response.status_code == 400
+        assert "filters must contain" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            ("/memories/audit", {"filters": {"user_id": "victim"}}),
+            ("/memories/consolidate", {"filters": {"user_id": "victim"}, "dry_run": False}),
+            ("/memories/mem-1/feedback", {"signal": "stale"}),
+        ],
+    )
+    def test_quality_operations_reject_non_admin_users(self, client, path, body):
+        import server.main as server_main
+
+        client.app.dependency_overrides.pop(server_main.require_admin)
+        client.app.dependency_overrides[server_main.verify_auth] = lambda: SimpleNamespace(role="user")
+
+        response = client.post(path, json=body)
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Admin role required."

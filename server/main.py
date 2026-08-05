@@ -204,8 +204,25 @@ class SearchRequest(BaseModel):
     filters: Optional[Dict[str, Any]] = None
     top_k: Optional[int] = Field(None, description="Maximum number of results to return.")
     threshold: Optional[float] = Field(None, description="Minimum similarity score for results.")
+    rerank: Optional[bool] = Field(None, description="Apply the configured reranker after state-aware filtering.")
     explain: Optional[bool] = Field(None, description="Include score details for each search result.")
     show_expired: Optional[bool] = Field(None, description="Include expired memories.")
+    max_chars: Optional[int] = Field(None, description="Maximum total memory-text characters to return.")
+
+
+class AuditRequest(BaseModel):
+    filters: Dict[str, Any] = Field(..., description="Identity scope and optional metadata filters to audit.")
+    limit: int = Field(1000, ge=0, description="Maximum number of memories to inspect.")
+
+
+class ConsolidateRequest(AuditRequest):
+    dry_run: bool = Field(True, description="Return proposed actions without changing memories.")
+    strategy: str = Field("safe", description="Deterministic consolidation strategy. Currently only 'safe'.")
+
+
+class FeedbackRequest(BaseModel):
+    signal: str = Field(..., description="One of: helpful, irrelevant, stale, incorrect.")
+    replacement_id: Optional[str] = Field(None, description="Optional memory ID that replaces this memory.")
 
 
 class GenerateInstructionsRequest(BaseModel):
@@ -455,6 +472,33 @@ def get_all_memories(
         raise upstream_error()
 
 
+@app.post("/memories/audit", summary="Audit memory quality")
+def audit_memories(audit_req: AuditRequest, _auth=Depends(require_admin)):
+    """Return a read-only, content-free quality report for an identity scope. Requires admin role."""
+    try:
+        return get_memory_instance().audit(audit_req.filters, limit=audit_req.limit)
+    except (ValueError, Mem0ValidationError) as e:
+        raise _client_error(e)
+    except Exception:
+        raise upstream_error()
+
+
+@app.post("/memories/consolidate", summary="Consolidate memories")
+def consolidate_memories(consolidate_req: ConsolidateRequest, _auth=Depends(require_admin)):
+    """Plan or apply reversible deterministic maintenance. Requires admin role."""
+    try:
+        return get_memory_instance().consolidate(
+            consolidate_req.filters,
+            dry_run=consolidate_req.dry_run,
+            strategy=consolidate_req.strategy,
+            limit=consolidate_req.limit,
+        )
+    except (ValueError, Mem0ValidationError) as e:
+        raise _client_error(e)
+    except Exception:
+        raise upstream_error()
+
+
 @app.get("/memories/{memory_id}", summary="Get a memory")
 def get_memory(memory_id: str, _auth=Depends(verify_auth)):
     """Retrieve a specific memory by ID."""
@@ -486,15 +530,34 @@ def search_memories(search_req: SearchRequest, _auth=Depends(verify_auth)):
             params["top_k"] = search_req.top_k
         if search_req.threshold is not None:
             params["threshold"] = search_req.threshold
+        if search_req.rerank is not None:
+            params["rerank"] = search_req.rerank
         if search_req.explain is not None:
             params["explain"] = search_req.explain
         if search_req.show_expired is not None:
             params["show_expired"] = search_req.show_expired
+        if search_req.max_chars is not None:
+            params["max_chars"] = search_req.max_chars
         return get_memory_instance().search(query=search_req.query, filters=filters, **params)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
+    except Exception:
+        raise upstream_error()
+
+
+@app.post("/memories/{memory_id}/feedback", summary="Record memory feedback")
+def feedback_memory(memory_id: str, feedback_req: FeedbackRequest, _auth=Depends(require_admin)):
+    """Record a recall-quality signal and optionally identify a replacement memory. Requires admin role."""
+    try:
+        return get_memory_instance().feedback(
+            memory_id,
+            signal=feedback_req.signal,
+            replacement_id=feedback_req.replacement_id,
+        )
+    except (ValueError, Mem0ValidationError) as e:
+        raise _client_error(e)
     except Exception:
         raise upstream_error()
 
