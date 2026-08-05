@@ -14,6 +14,9 @@ class ShadowRuntimeError(RuntimeError):
     pass
 
 
+SHADOW_APP_CONTAINER = "mem0_0-arch-shadow-mem0-1"
+
+
 class Runner(Protocol):
     def run(self, command: Sequence[str], **kwargs: Any) -> bytes: ...
 
@@ -114,7 +117,12 @@ def start_shadow(
     if labels != f"{revision}|{tree_digest}":
         raise ShadowRuntimeError("built image labels do not match the attested candidate source")
     compose = ["podman", "compose", "-f", str(compose_file), "--profile", "application"]
-    runner.run([*compose, "up", "-d", "--no-build"])
+    runner.run([*compose, "up", "-d", "--no-build", "--force-recreate", "mem0"])
+    running_image = (
+        runner.run(["podman", "inspect", "--format", "{{.ImageName}}", SHADOW_APP_CONTAINER]).decode().strip()
+    )
+    if running_image != image:
+        raise ShadowRuntimeError("running shadow image does not match the attested candidate image")
     return {
         "schema_version": 1,
         "status": "started",
