@@ -355,6 +355,69 @@ def test_explicit_linked_state_change_reuses_canonical_predecessor_key():
     assert memory.vector_store.update.call_args.kwargs["payload"]["_mem0_status"] == "superseded"
 
 
+def test_retroactive_state_change_closes_predecessor_at_effective_valid_from():
+    old = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "created_at": "2019-01-01T00:00:00+00:00",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "active",
+            "_mem0_valid_from": "2019-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+        },
+    )
+    changed = extraction("User has lived in Osaka since 2020", "Osaka")
+    changed["valid_from"] = "2020-01-01T00:00:00+00:00"
+    memory = make_memory([changed], existing=[old])
+
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "I have lived in Osaka since 2020"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    predecessor = memory.vector_store.update.call_args.kwargs["payload"]
+    assert predecessor["_mem0_valid_to"] == "2020-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_async_retroactive_state_change_closes_predecessor_at_effective_valid_from():
+    old = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "created_at": "2019-01-01T00:00:00+00:00",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "active",
+            "_mem0_valid_from": "2019-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+        },
+    )
+    changed = extraction("User has lived in Osaka since 2020", "Osaka")
+    changed["valid_from"] = "2020-01-01T00:00:00+00:00"
+    memory = make_memory([changed], existing=[old], memory_class=AsyncMemory)
+
+    await memory._add_to_vector_store(
+        [{"role": "user", "content": "I have lived in Osaka since 2020"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    predecessor = memory.vector_store.update.call_args.kwargs["payload"]
+    assert predecessor["_mem0_valid_to"] == "2020-01-01T00:00:00+00:00"
+
+
 def test_linked_historical_predecessor_identifies_current_chain_head():
     historical = SimpleNamespace(
         id="old-id",
@@ -982,91 +1045,97 @@ async def test_async_state_transition_fails_when_candidate_discovery_fails():
         )
 
 
-def test_state_aware_state_write_fails_closed_for_incomplete_enumeration_provider():
+def test_state_aware_state_write_degrades_to_disputed_for_incomplete_enumeration_provider():
     memory = make_memory([extraction("User lives in Tokyo", "Tokyo")])
     store = use_incomplete_enumeration_store(memory)
 
-    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
-        memory._add_to_vector_store(
-            [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
-            {"user_id": "u1"},
-            {"user_id": "u1"},
-            infer=True,
-        )
+    result = memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
 
+    assert result[0]["memory"] == "User lives in Tokyo"
+    payload = store.insert.call_args.kwargs["payloads"][0]
+    assert payload["_mem0_status"] == "disputed"
+    assert payload["_mem0_candidate_discovery"] == "unavailable"
     memory.llm.generate_response.assert_called_once()
     memory.embedding_model.embed.assert_not_called()
-    memory.embedding_model.embed_batch.assert_not_called()
+    memory.embedding_model.embed_batch.assert_called_once()
     store.search.assert_not_called()
     store.list.assert_not_called()
-    store.insert.assert_not_called()
+    store.insert.assert_called_once()
     store.update.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_async_state_aware_state_write_fails_closed_for_incomplete_enumeration_provider():
+async def test_async_state_aware_state_write_degrades_to_disputed_for_incomplete_enumeration_provider():
     memory = make_memory([extraction("User lives in Tokyo", "Tokyo")], memory_class=AsyncMemory)
     store = use_incomplete_enumeration_store(memory)
 
-    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
-        await memory._add_to_vector_store(
-            [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
-            {"user_id": "u1"},
-            {"user_id": "u1"},
-            infer=True,
-        )
+    result = await memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
 
+    assert result[0]["memory"] == "User lives in Tokyo"
+    payload = store.insert.call_args.kwargs["payloads"][0]
+    assert payload["_mem0_status"] == "disputed"
+    assert payload["_mem0_candidate_discovery"] == "unavailable"
     memory.llm.generate_response.assert_called_once()
     memory.embedding_model.embed.assert_not_called()
-    memory.embedding_model.embed_batch.assert_not_called()
+    memory.embedding_model.embed_batch.assert_called_once()
     store.search.assert_not_called()
     store.list.assert_not_called()
-    store.insert.assert_not_called()
+    store.insert.assert_called_once()
     store.update.assert_not_called()
 
 
-def test_state_aware_state_write_fails_closed_for_unmarked_enumeration_provider():
+def test_state_aware_state_write_degrades_to_disputed_for_unmarked_enumeration_provider():
     memory = make_memory([extraction("User lives in Tokyo", "Tokyo")])
     store = UnmarkedEnumerationVectorStore()
     memory.vector_store = store
 
-    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
-        memory._add_to_vector_store(
-            [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
-            {"user_id": "u1"},
-            {"user_id": "u1"},
-            infer=True,
-        )
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
 
+    assert store.insert.call_args.kwargs["payloads"][0]["_mem0_status"] == "disputed"
     memory.llm.generate_response.assert_called_once()
     memory.embedding_model.embed.assert_not_called()
-    memory.embedding_model.embed_batch.assert_not_called()
+    memory.embedding_model.embed_batch.assert_called_once()
     store.search.assert_not_called()
     store.list.assert_not_called()
-    store.insert.assert_not_called()
+    store.insert.assert_called_once()
     store.update.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_async_state_aware_state_write_fails_closed_for_unmarked_enumeration_provider():
+async def test_async_state_aware_state_write_degrades_to_disputed_for_unmarked_enumeration_provider():
     memory = make_memory([extraction("User lives in Tokyo", "Tokyo")], memory_class=AsyncMemory)
     store = UnmarkedEnumerationVectorStore()
     memory.vector_store = store
 
-    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
-        await memory._add_to_vector_store(
-            [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
-            {"user_id": "u1"},
-            {"user_id": "u1"},
-            infer=True,
-        )
+    await memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
 
+    assert store.insert.call_args.kwargs["payloads"][0]["_mem0_status"] == "disputed"
     memory.llm.generate_response.assert_called_once()
     memory.embedding_model.embed.assert_not_called()
-    memory.embedding_model.embed_batch.assert_not_called()
+    memory.embedding_model.embed_batch.assert_called_once()
     store.search.assert_not_called()
     store.list.assert_not_called()
-    store.insert.assert_not_called()
+    store.insert.assert_called_once()
     store.update.assert_not_called()
 
 
@@ -1102,7 +1171,7 @@ async def test_weaviate_state_extraction_without_subject_or_predicate_is_rejecte
 
 
 @pytest.mark.parametrize("provider_list_outcome", ["masked-error", "truncated-success"])
-def test_pinecone_state_write_rejects_unproven_list_before_provider_operations(provider_list_outcome):
+def test_pinecone_state_write_degrades_without_unproven_list(provider_list_outcome):
     memory = make_memory([extraction("User lives in Tokyo", "Tokyo")])
     store = PineconeDB.__new__(PineconeDB)
     store.index = MagicMock()
@@ -1127,21 +1196,21 @@ def test_pinecone_state_write_rejects_unproven_list_before_provider_operations(p
             )
         )
     store.index.query.side_effect = [search_response, list_response]
+    store.get = MagicMock(return_value=SimpleNamespace(id="persisted"))
     memory.vector_store = store
 
-    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
-        memory._add_to_vector_store(
-            [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
-            {"user_id": "u1"},
-            {"user_id": "u1"},
-            infer=True,
-        )
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved from Osaka to Tokyo"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
 
     memory.llm.generate_response.assert_called_once()
     memory.embedding_model.embed.assert_not_called()
-    memory.embedding_model.embed_batch.assert_not_called()
+    memory.embedding_model.embed_batch.assert_called_once()
     store.index.query.assert_not_called()
-    store.index.upsert.assert_not_called()
+    store.index.upsert.assert_called_once()
 
 
 def test_qdrant_scroll_error_aborts_state_write_before_batch_operations():

@@ -188,7 +188,7 @@ const expiring = memory.add(messages, {
   Python and TypeScript OSS inference use one evidence-bound extraction call. Each admitted memory must cite an exact excerpt and source-message index from a non-system message. State memories can corroborate, supersede, or dispute earlier values while preserving every version; events and independent preferences are not replaced merely because they are newer or semantically similar. Embeddings complete before persistence, and every inserted ID is verified; incomplete provider batches are compensated and raise `MemoryPersistenceError`.
 </Note>
 
-Lifecycle fields beginning with `_mem0_` are reserved and ignored in caller-supplied update metadata. In state-aware mode, lifecycle-managed state-like memories cannot have their text edited in place because that would invalidate their value and version links; call `add()` with the correction instead. Legacy records and `recall.mode="legacy"` retain the existing update behavior.
+Lifecycle fields beginning with `_mem0_` are reserved and ignored in caller-supplied update metadata. Explicit effective dates define version boundaries, so a correction learned today that says a new state began in 2020 closes its predecessor at the 2020 boundary rather than today's ingestion time. In state-aware mode, lifecycle-managed state-like memories cannot have their text edited in place because that would invalidate their value and version links; call `add()` with the correction instead. Legacy records and `recall.mode="legacy"` retain the existing update behavior.
 
 <Warning>
 If you do choose `infer=False`, keep it consistent. Raw inserts skip inference, so a later `infer=True` call with the same content can create a second memory.

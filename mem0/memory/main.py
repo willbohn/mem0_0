@@ -445,6 +445,16 @@ def _adopt_linked_state_key(lifecycle_metadata, lifecycle_candidates):
         lifecycle_metadata["_mem0_state_key"] = linked_keys.pop()
 
 
+def _validate_feedback_replacement_scope(existing, replacement, replacement_id):
+    """Require a feedback replacement to exist in the exact same identity scope."""
+    if replacement is None:
+        raise ValueError(f"Replacement memory with id {replacement_id} not found")
+    existing_payload = existing.payload or {}
+    replacement_payload = replacement.payload or {}
+    if any(existing_payload.get(key) != replacement_payload.get(key) for key in ENTITY_PARAMS):
+        raise ValueError("Replacement memory must use the same identity scope")
+
+
 def _verify_complete_insert(vector_store, memory_ids):
     """Raise when a provider returns successfully without making every planned ID readable."""
     missing = []
@@ -1288,9 +1298,17 @@ class Memory(MemoryBase):
         ):
             raise MemoryPersistenceError("State-like extraction requires a normalized state key")
         needs_lifecycle_candidates = recall_mode == "state_aware" and bool(state_like_memories)
+        supports_complete_list = getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is True
         lifecycle_candidates = (
-            _discover_lifecycle_candidates(self.vector_store, search_filters) if needs_lifecycle_candidates else []
+            _discover_lifecycle_candidates(self.vector_store, search_filters)
+            if needs_lifecycle_candidates and supports_complete_list
+            else []
         )
+        if needs_lifecycle_candidates and not supports_complete_list:
+            for memory in state_like_memories:
+                lifecycle = memory["_mem0_lifecycle"]
+                lifecycle["_mem0_status"] = "disputed"
+                lifecycle["_mem0_candidate_discovery"] = "unavailable"
         for memory in state_like_memories:
             _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
@@ -1402,7 +1420,7 @@ class Memory(MemoryBase):
                     old_payload = deepcopy(existing["payload"])
                     new_payload = deepcopy(existing["payload"])
                     new_payload["_mem0_status"] = "superseded"
-                    new_payload["_mem0_valid_to"] = mem_metadata["created_at"]
+                    new_payload["_mem0_valid_to"] = mem_metadata.get("_mem0_valid_from", mem_metadata["created_at"])
                     new_payload["_mem0_superseded_by"] = memory_id
                     predecessor_updates.append((existing["id"], old_payload, new_payload))
                     existing["payload"] = deepcopy(new_payload)
@@ -2605,6 +2623,9 @@ class Memory(MemoryBase):
         existing = self.vector_store.get(vector_id=memory_id)
         if existing is None:
             raise ValueError(f"Memory with id {memory_id} not found")
+        if replacement_id is not None:
+            replacement = self.vector_store.get(vector_id=str(replacement_id))
+            _validate_feedback_replacement_scope(existing, replacement, replacement_id)
         payload = deepcopy(existing.payload or {})
         payload.setdefault("_mem0_status", "active")
         payload["_mem0_last_feedback"] = signal
@@ -3431,11 +3452,17 @@ class AsyncMemory(MemoryBase):
         ):
             raise MemoryPersistenceError("State-like extraction requires a normalized state key")
         needs_lifecycle_candidates = recall_mode == "state_aware" and bool(state_like_memories)
+        supports_complete_list = getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is True
         lifecycle_candidates = (
             await asyncio.to_thread(_discover_lifecycle_candidates, self.vector_store, search_filters)
-            if needs_lifecycle_candidates
+            if needs_lifecycle_candidates and supports_complete_list
             else []
         )
+        if needs_lifecycle_candidates and not supports_complete_list:
+            for memory in state_like_memories:
+                lifecycle = memory["_mem0_lifecycle"]
+                lifecycle["_mem0_status"] = "disputed"
+                lifecycle["_mem0_candidate_discovery"] = "unavailable"
         for memory in state_like_memories:
             _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
@@ -3546,7 +3573,7 @@ class AsyncMemory(MemoryBase):
                     old_payload = deepcopy(existing["payload"])
                     new_payload = deepcopy(existing["payload"])
                     new_payload["_mem0_status"] = "superseded"
-                    new_payload["_mem0_valid_to"] = mem_metadata["created_at"]
+                    new_payload["_mem0_valid_to"] = mem_metadata.get("_mem0_valid_from", mem_metadata["created_at"])
                     new_payload["_mem0_superseded_by"] = memory_id
                     predecessor_updates.append((existing["id"], old_payload, new_payload))
                     existing["payload"] = deepcopy(new_payload)
@@ -4810,6 +4837,9 @@ class AsyncMemory(MemoryBase):
         existing = await asyncio.to_thread(self.vector_store.get, vector_id=memory_id)
         if existing is None:
             raise ValueError(f"Memory with id {memory_id} not found")
+        if replacement_id is not None:
+            replacement = await asyncio.to_thread(self.vector_store.get, vector_id=str(replacement_id))
+            _validate_feedback_replacement_scope(existing, replacement, replacement_id)
         payload = deepcopy(existing.payload or {})
         payload.setdefault("_mem0_status", "active")
         payload["_mem0_last_feedback"] = signal

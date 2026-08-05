@@ -219,7 +219,10 @@ def test_consolidate_restores_prior_updates_when_later_update_fails():
 )
 def test_feedback_suppresses_only_explicit_stale_or_incorrect(signal, expected_status):
     memory = make_memory()
-    memory.vector_store.get.return_value = row("m1", "Fact", _mem0_status="active", _mem0_evidence_strength=0.9)
+    memory.vector_store.get.side_effect = [
+        row("m1", "Fact", user_id="u1", _mem0_status="active", _mem0_evidence_strength=0.9),
+        row("m2", "Replacement", user_id="u1", _mem0_status="active"),
+    ]
 
     memory.feedback("m1", signal=signal, replacement_id="m2")
 
@@ -227,6 +230,43 @@ def test_feedback_suppresses_only_explicit_stale_or_incorrect(signal, expected_s
     assert payload["_mem0_status"] == expected_status
     assert payload["_mem0_replacement_id"] == "m2"
     assert payload["_mem0_evidence_strength"] == 0.9
+
+
+def test_feedback_rejects_missing_replacement_before_mutating_memory():
+    memory = make_memory()
+    memory.vector_store.get.side_effect = [row("m1", "Fact", user_id="u1"), None]
+
+    with pytest.raises(ValueError, match="Replacement memory with id m2 not found"):
+        memory.feedback("m1", signal="stale", replacement_id="m2")
+
+    memory.vector_store.update.assert_not_called()
+
+
+def test_feedback_rejects_replacement_outside_identity_scope_before_mutating_memory():
+    memory = make_memory()
+    memory.vector_store.get.side_effect = [
+        row("m1", "Fact", user_id="u1", agent_id="agent", run_id="run"),
+        row("m2", "Replacement", user_id="u2", agent_id="agent", run_id="run"),
+    ]
+
+    with pytest.raises(ValueError, match="same identity scope"):
+        memory.feedback("m1", signal="incorrect", replacement_id="m2")
+
+    memory.vector_store.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_feedback_rejects_replacement_outside_identity_scope():
+    memory = make_memory(AsyncMemory)
+    memory.vector_store.get.side_effect = [
+        row("m1", "Fact", user_id="u1"),
+        row("m2", "Replacement", user_id="u2"),
+    ]
+
+    with pytest.raises(ValueError, match="same identity scope"):
+        await memory.feedback("m1", signal="stale", replacement_id="m2")
+
+    memory.vector_store.update.assert_not_called()
 
 
 def test_helpful_feedback_changes_salience_not_evidence_strength_or_eligibility():

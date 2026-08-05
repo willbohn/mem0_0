@@ -27,6 +27,7 @@ jest.mock("../src/llms/openai", () => ({
           }>;
           const source = indexed[0];
           const city = source.content.includes("Osaka") ? "Osaka" : "Kyoto";
+          const validFromYear = /\bsince (\d{4})\b/u.exec(source.content)?.[1];
           return JSON.stringify({
             memory: [
               {
@@ -43,6 +44,9 @@ jest.mock("../src/llms/openai", () => ({
                 },
                 ...(city === "Osaka"
                   ? { relation: "supersedes", linked_memory_ids: ["0"] }
+                  : {}),
+                ...(validFromYear
+                  ? { valid_from: `${validFromYear}-01-01T00:00:00Z` }
                   : {}),
               },
             ],
@@ -130,6 +134,30 @@ describe("Memory state-aware lifecycle", () => {
         (await memory.get(second.results[0].id))!.metadata || {},
       ).some((key) => key.startsWith("_mem0_")),
     ).toBe(false);
+  });
+
+  test("closes a predecessor at a retroactive superseding state's effective date", async () => {
+    const memory = createMemory();
+    const filters = { user_id: "retroactive-validity-user" };
+    const first = await memory.add("I live in Kyoto since 2018", {
+      userId: filters.user_id,
+    });
+    await memory.add("I live in Osaka since 2020", {
+      userId: filters.user_id,
+    });
+
+    const predecessor = await (memory as any).vectorStore.get(
+      first.results[0].id,
+    );
+    expect(predecessor.payload._mem0_valid_to).toBe("2020-01-01T00:00:00Z");
+
+    const historical = await memory.search("Where did I live in 2024?", {
+      filters,
+      threshold: 0,
+    });
+    expect(historical.results.map((item) => item.memory)).toEqual([
+      "User lives in Osaka",
+    ]);
   });
 
   test("applies maxChars after state-aware ranking", async () => {

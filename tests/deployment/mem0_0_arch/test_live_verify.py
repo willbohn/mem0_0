@@ -12,8 +12,18 @@ from deployment.mem0_0_arch.live_verify import ConfigurationError, LiveVerifier,
 
 
 class FakeLiveAPI:
-    def __init__(self, *, fail_path: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_path: str | None = None,
+        extra_scope_records: int = 0,
+        invalid_scoped_cleanup_row: bool = False,
+        ignore_deletes: bool = False,
+    ) -> None:
         self.fail_path = fail_path
+        self.extra_scope_records = extra_scope_records
+        self.invalid_scoped_cleanup_row = invalid_scoped_cleanup_row
+        self.ignore_deletes = ignore_deletes
         self.requests = []
         self.scope: dict[str, str] | None = None
         self.records: dict[str, dict] = {}
@@ -39,6 +49,16 @@ class FakeLiveAPI:
                 "agent_id": self.scope["agent_id"],
                 "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
             }
+            if memory_id == "synthetic-osaka":
+                for index in range(self.extra_scope_records):
+                    extra_id = f"synthetic-extra-{index:04d}"
+                    self.records[extra_id] = {
+                        "id": extra_id,
+                        "memory": "Synthetic cleanup fixture",
+                        "user_id": self.scope["user_id"],
+                        "agent_id": self.scope["agent_id"],
+                        "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
+                    }
             return self._json({"results": [{"id": memory_id, "event": "ADD"}]})
 
         if method == "POST" and parsed.path == "/search":
@@ -62,6 +82,16 @@ class FakeLiveAPI:
         if method == "GET" and parsed.path == "/memories":
             assert {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"} == self.scope
             rows = list(self.records.values())
+            if self.invalid_scoped_cleanup_row:
+                rows.append(
+                    {
+                        "id": "unsafe/id",
+                        "memory": "Synthetic malformed cleanup fixture",
+                        "user_id": self.scope["user_id"],
+                        "agent_id": self.scope["agent_id"],
+                        "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
+                    }
+                )
             if self.fail_path:
                 rows.append(
                     {
@@ -72,10 +102,12 @@ class FakeLiveAPI:
                         "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
                     }
                 )
-            return self._json({"results": rows})
+            top_k = int(parse_qs(parsed.query)["top_k"][-1])
+            return self._json({"results": rows[:top_k]})
 
         if method == "DELETE" and parsed.path.startswith("/memories/"):
-            self.records.pop(parsed.path.rsplit("/", 1)[-1], None)
+            if not self.ignore_deletes:
+                self.records.pop(parsed.path.rsplit("/", 1)[-1], None)
             return self._json({"message": "Memory deleted successfully"})
 
         raise AssertionError(f"unexpected request: {method} {parsed.path}")
@@ -167,6 +199,49 @@ def test_failure_still_cleans_only_ids_verified_in_the_unique_scope(key_file: Pa
     assert set(deletes) == {"/memories/synthetic-kyoto", "/memories/synthetic-osaka"}
     assert "/memories/legacy-row" not in deletes
     assert "private-response-body" not in json.dumps(report)
+
+
+def test_cleanup_drains_all_scoped_records_across_bounded_server_list_batches(key_file: Path, monkeypatch) -> None:
+    """A capped scoped list must not leave synthetic records after the first batch."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    api = FakeLiveAPI(extra_scope_records=1001)
+
+    report = LiveVerifier(api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["checks"]["cleanup_complete"] is True
+    assert report["counts"]["cleanup_discovered"] == 1003
+    assert report["counts"]["cleanup_deleted"] == 1003
+    assert report["counts"]["cleanup_remaining"] == 0
+    assert api.records == {}
+    cleanup_lists = [
+        query for method, path, query, _body, _headers in api.requests if method == "GET" and path == "/memories"
+    ]
+    assert len(cleanup_lists) == 3
+    assert all(query["top_k"] == ["1000"] for query in cleanup_lists)
+
+
+def test_cleanup_fails_closed_when_a_scoped_row_cannot_be_safely_deleted(key_file: Path, monkeypatch) -> None:
+    """An invalid scoped ID cannot count as a completed empty-scope proof."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    api = FakeLiveAPI(invalid_scoped_cleanup_row=True)
+
+    report = LiveVerifier(api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["cleanup_complete"] is False
+    assert set(api.records) == {"synthetic-kyoto", "synthetic-osaka"}
+
+
+def test_cleanup_fails_closed_when_delete_success_does_not_drain_scope(key_file: Path, monkeypatch) -> None:
+    """A provider that acknowledges but does not apply deletes cannot spin forever or report success."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    api = FakeLiveAPI(ignore_deletes=True)
+
+    report = LiveVerifier(api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["cleanup_complete"] is False
+    assert set(api.records) == {"synthetic-kyoto", "synthetic-osaka"}
 
 
 def test_file_only_auth_rejects_inline_or_non_private_credentials(key_file: Path, monkeypatch, tmp_path: Path) -> None:

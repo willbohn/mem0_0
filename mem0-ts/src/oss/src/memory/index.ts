@@ -1445,6 +1445,7 @@ export class Memory {
         lifecycle._mem0_relation === "supersedes" &&
         sameState.length > 0
       ) {
+        const supersedingValidFrom = memPayload._mem0_valid_from ?? now;
         memPayload._mem0_supersedes = sameState
           .map((candidate) => candidate.id)
           .sort();
@@ -1452,7 +1453,7 @@ export class Memory {
           const updated = {
             ...candidate.payload,
             _mem0_status: "superseded",
-            _mem0_valid_to: now,
+            _mem0_valid_to: supersedingValidFrom,
             _mem0_superseded_by: memoryId,
           };
           predecessorUpdates.push({

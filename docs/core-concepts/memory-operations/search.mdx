@@ -210,7 +210,7 @@ await memory.feedback(memoryId, {
 });
 ```
 
-`audit()` reports IDs and issue counts without returning memory bodies. `consolidate()` defaults to a dry run and only archives or suppresses records; `delete()` remains the explicit physical-deletion API. Feedback signals are `helpful`, `irrelevant`, `stale`, and `incorrect`. Helpful feedback affects salience only, while explicit stale or incorrect feedback changes current-recall eligibility. TypeScript option names use camelCase.
+`audit()` reports IDs and issue counts without returning memory bodies. `consolidate()` defaults to a dry run and only archives or suppresses records; `delete()` remains the explicit physical-deletion API. Feedback signals are `helpful`, `irrelevant`, `stale`, and `incorrect`. Helpful feedback affects salience only, while explicit stale or incorrect feedback changes current-recall eligibility. When `replacement_id` or `replacementId` is supplied, the replacement must exist and have the same `user_id`, `agent_id`, and `run_id` identity scope. TypeScript option names use camelCase.
 
 ## Filter patterns
 

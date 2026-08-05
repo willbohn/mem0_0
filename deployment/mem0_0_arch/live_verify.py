@@ -21,6 +21,7 @@ DEFAULT_API_URL = "http://127.0.0.1:28889"
 DEFAULT_KEY_FILE = Path("/home/will/.config/mem0_0-arch/bridge-api-key")
 MAX_BODY_BYTES = 512 * 1024
 MAX_SCOPE_RESULTS = 100
+MAX_CLEANUP_BATCH = 1_000
 REQUIRED_SCOPE = ("user_id", "agent_id", "machine_id", "project_id", "data_class")
 MEMORY_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,256}$")
 
@@ -221,37 +222,58 @@ class LiveVerifier:
         )
 
     def _discover_scope_ids(self) -> set[str]:
-        query = {**self.scope, "top_k": MAX_SCOPE_RESULTS}
+        # The server supports a bounded `top_k` list (maximum 1,000) but no
+        # cursor. Cleanup drains exact-ID batches and requires a final empty
+        # scoped listing before it can report completion.
+        query = {**self.scope, "top_k": MAX_CLEANUP_BATCH}
         rows = self._results(self._request("GET", "/memories", query=query))
-        return {
-            str(row["id"])
-            for row in rows
-            if self._row_matches_scope(row)
-            and isinstance(row.get("id"), str)
-            and MEMORY_ID_RE.fullmatch(str(row["id"]))
-        }
+        memory_ids: set[str] = set()
+        for row in rows:
+            if not self._row_matches_scope(row):
+                continue
+            memory_id = row.get("id")
+            if not isinstance(memory_id, str) or not MEMORY_ID_RE.fullmatch(memory_id):
+                raise VerificationError("scoped discovery returned an invalid memory identifier")
+            memory_ids.add(memory_id)
+        return memory_ids
 
     def _cleanup(self) -> None:
         started = time.monotonic()
         discovered: set[str] = set()
-        deleted = 0
-        discovery_succeeded = False
+        deleted: set[str] = set()
+        cleanup_failed = False
+        terminal_discovery_succeeded = False
+        remaining: set[str] = set()
+        seen_batches: set[tuple[str, ...]] = set()
         try:
-            discovered = self._discover_scope_ids()
-            discovery_succeeded = True
-            for memory_id in sorted(discovered):
+            while True:
+                batch = self._discover_scope_ids()
+                if not batch:
+                    terminal_discovery_succeeded = True
+                    break
+                batch_key = tuple(sorted(batch))
+                if batch_key in seen_batches:
+                    cleanup_failed = True
+                    remaining = batch
+                    break
+                seen_batches.add(batch_key)
+                discovered.update(batch)
                 try:
-                    self._request("DELETE", f"/memories/{quote(memory_id, safe='')}")
-                    deleted += 1
+                    for memory_id in sorted(batch):
+                        self._request("DELETE", f"/memories/{quote(memory_id, safe='')}")
+                        deleted.add(memory_id)
                 except Exception:
-                    continue
-            remaining = self._discover_scope_ids()
+                    cleanup_failed = True
+                    remaining = self._discover_scope_ids()
+                    break
         except Exception:
             remaining = discovered
         self.report["counts"]["cleanup_discovered"] = len(discovered)
-        self.report["counts"]["cleanup_deleted"] = deleted
+        self.report["counts"]["cleanup_deleted"] = len(deleted)
         self.report["counts"]["cleanup_remaining"] = len(remaining)
-        self.report["checks"]["cleanup_complete"] = discovery_succeeded and deleted == len(discovered) and not remaining
+        self.report["checks"]["cleanup_complete"] = (
+            terminal_discovery_succeeded and not cleanup_failed and len(deleted) == len(discovered) and not remaining
+        )
         self.report["timings_ms"]["cleanup"] = round((time.monotonic() - started) * 1000, 3)
 
     def _run_flow(self) -> None:
