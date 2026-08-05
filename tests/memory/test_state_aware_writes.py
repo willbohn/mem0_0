@@ -355,6 +355,38 @@ def test_explicit_linked_state_change_reuses_canonical_predecessor_key():
     assert memory.vector_store.update.call_args.kwargs["payload"]["_mem0_status"] == "superseded"
 
 
+def test_explicit_linked_move_event_is_promoted_to_predecessor_state_transition():
+    old = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User lives in Seattle",
+            "user_id": "u1",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Seattle",
+            "_mem0_status": "active",
+            "_mem0_schema_version": 1,
+        },
+    )
+    changed = extraction("User moved to Austin", "Austin", kind="event")
+    changed["linked_memory_ids"] = ["0"]
+    memory = make_memory([changed], existing=[old])
+
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "I moved to Austin"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    new_payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert new_payload["_mem0_kind"] == "state"
+    assert new_payload["_mem0_state_key"] == "user::residence"
+    assert new_payload["_mem0_supersedes"] == ["old-id"]
+    assert memory.vector_store.update.call_args.kwargs["payload"]["_mem0_status"] == "superseded"
+
+
 def test_retroactive_state_change_closes_predecessor_at_effective_valid_from():
     old = SimpleNamespace(
         id="old-id",

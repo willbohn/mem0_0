@@ -432,16 +432,26 @@ def _adopt_linked_state_key(lifecycle_metadata, lifecycle_candidates):
     if not related_ids:
         return
     kind = lifecycle_metadata.get("_mem0_kind")
-    linked_keys = {
-        candidate["payload"].get("_mem0_state_key")
+    promote_linked_event = kind == "event" and lifecycle_metadata.get("_mem0_relation") == "supersedes"
+    linked_candidates = [
+        candidate
         for candidate in lifecycle_candidates
         if candidate["id"] in related_ids
-        and candidate["payload"].get("_mem0_kind") == kind
         and candidate["payload"].get("_mem0_state_key")
-    }
+        and (
+            candidate["payload"].get("_mem0_kind") == kind
+            or (promote_linked_event and candidate["payload"].get("_mem0_kind") in STATE_LIKE_KINDS)
+        )
+    ]
+    linked_keys = {candidate["payload"]["_mem0_state_key"] for candidate in linked_candidates}
     if len(linked_keys) > 1:
         raise MemoryPersistenceError("Linked state transition spans multiple canonical state keys")
     if linked_keys:
+        if promote_linked_event:
+            linked_kinds = {candidate["payload"].get("_mem0_kind") for candidate in linked_candidates}
+            if len(linked_kinds) != 1:
+                raise MemoryPersistenceError("Linked state transition spans multiple memory kinds")
+            lifecycle_metadata["_mem0_kind"] = linked_kinds.pop()
         lifecycle_metadata["_mem0_state_key"] = linked_keys.pop()
 
 
@@ -1293,24 +1303,37 @@ class Memory(MemoryBase):
             for memory in extracted_memories
             if memory.get("_mem0_lifecycle", {}).get("_mem0_kind") in STATE_LIKE_KINDS
         ]
-        if recall_mode == "state_aware" and any(
-            not memory.get("_mem0_lifecycle", {}).get("_mem0_state_key") for memory in state_like_memories
-        ):
-            raise MemoryPersistenceError("State-like extraction requires a normalized state key")
-        needs_lifecycle_candidates = recall_mode == "state_aware" and bool(state_like_memories)
+        explicit_linked_transitions = [
+            memory
+            for memory in extracted_memories
+            if memory.get("_mem0_lifecycle", {}).get("_mem0_relation") == "supersedes"
+            and memory.get("_mem0_lifecycle", {}).get("_mem0_related_to")
+        ]
+        needs_lifecycle_candidates = recall_mode == "state_aware" and bool(
+            state_like_memories or explicit_linked_transitions
+        )
         supports_complete_list = getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is True
         lifecycle_candidates = (
             _discover_lifecycle_candidates(self.vector_store, search_filters)
             if needs_lifecycle_candidates and supports_complete_list
             else []
         )
+        for memory in extracted_memories:
+            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
+        state_like_memories = [
+            memory
+            for memory in extracted_memories
+            if memory.get("_mem0_lifecycle", {}).get("_mem0_kind") in STATE_LIKE_KINDS
+        ]
+        if recall_mode == "state_aware" and any(
+            not memory.get("_mem0_lifecycle", {}).get("_mem0_state_key") for memory in state_like_memories
+        ):
+            raise MemoryPersistenceError("State-like extraction requires a normalized state key")
         if needs_lifecycle_candidates and not supports_complete_list:
             for memory in state_like_memories:
                 lifecycle = memory["_mem0_lifecycle"]
                 lifecycle["_mem0_status"] = "disputed"
                 lifecycle["_mem0_candidate_discovery"] = "unavailable"
-        for memory in state_like_memories:
-            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
         # Phase 3: Batch embed all extracted memory texts
         mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]
@@ -3447,24 +3470,37 @@ class AsyncMemory(MemoryBase):
             for memory in extracted_memories
             if memory.get("_mem0_lifecycle", {}).get("_mem0_kind") in STATE_LIKE_KINDS
         ]
-        if recall_mode == "state_aware" and any(
-            not memory.get("_mem0_lifecycle", {}).get("_mem0_state_key") for memory in state_like_memories
-        ):
-            raise MemoryPersistenceError("State-like extraction requires a normalized state key")
-        needs_lifecycle_candidates = recall_mode == "state_aware" and bool(state_like_memories)
+        explicit_linked_transitions = [
+            memory
+            for memory in extracted_memories
+            if memory.get("_mem0_lifecycle", {}).get("_mem0_relation") == "supersedes"
+            and memory.get("_mem0_lifecycle", {}).get("_mem0_related_to")
+        ]
+        needs_lifecycle_candidates = recall_mode == "state_aware" and bool(
+            state_like_memories or explicit_linked_transitions
+        )
         supports_complete_list = getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is True
         lifecycle_candidates = (
             await asyncio.to_thread(_discover_lifecycle_candidates, self.vector_store, search_filters)
             if needs_lifecycle_candidates and supports_complete_list
             else []
         )
+        for memory in extracted_memories:
+            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
+        state_like_memories = [
+            memory
+            for memory in extracted_memories
+            if memory.get("_mem0_lifecycle", {}).get("_mem0_kind") in STATE_LIKE_KINDS
+        ]
+        if recall_mode == "state_aware" and any(
+            not memory.get("_mem0_lifecycle", {}).get("_mem0_state_key") for memory in state_like_memories
+        ):
+            raise MemoryPersistenceError("State-like extraction requires a normalized state key")
         if needs_lifecycle_candidates and not supports_complete_list:
             for memory in state_like_memories:
                 lifecycle = memory["_mem0_lifecycle"]
                 lifecycle["_mem0_status"] = "disputed"
                 lifecycle["_mem0_candidate_discovery"] = "unavailable"
-        for memory in state_like_memories:
-            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
         # Phase 3: Batch embed all extracted memory texts
         mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]
