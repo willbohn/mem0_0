@@ -206,6 +206,12 @@ export class ConfigManager {
       disableHistory:
         userConfig.disableHistory || DEFAULT_MEMORY_CONFIG.disableHistory,
       reranker: userConfig.reranker,
+      recall: {
+        mode:
+          userConfig.recall?.mode ??
+          DEFAULT_MEMORY_CONFIG.recall?.mode ??
+          "stateAware",
+      },
     };
 
     // Validate the merged config

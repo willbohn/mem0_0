@@ -55,8 +55,13 @@ describe("Memory Input Validation", () => {
       },
       vectorStore: {
         provider: "memory",
-        config: { collectionName: "validation-test" },
+        config: {
+          collectionName: "validation-test",
+          dbPath: ":memory:",
+        },
       },
+      historyDbPath: ":memory:",
+      recall: { mode: "legacy" },
     });
     // Wait for initialization
     await new Promise((resolve) => setTimeout(resolve, 2000));

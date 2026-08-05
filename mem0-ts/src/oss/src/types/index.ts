@@ -151,6 +151,9 @@ export interface MemoryConfig {
   disableHistory?: boolean;
   historyDbPath?: string;
   customInstructions?: string;
+  recall?: {
+    mode: "stateAware" | "legacy";
+  };
 }
 
 export interface MemoryItem {
@@ -162,6 +165,8 @@ export interface MemoryItem {
   score?: number;
   /** Relevance score added by the reranker, alongside (not replacing) `score`. */
   rerankScore?: number;
+  /** State-aware fusion diagnostics, present only when `explain` is enabled. */
+  score_details?: Record<string, any>;
   metadata?: Record<string, any>;
   attributedTo?: string;
 }
@@ -256,6 +261,11 @@ export const MemoryConfigSchema = z.object({
     .object({
       provider: z.string(),
       config: z.record(z.string(), z.any()),
+    })
+    .optional(),
+  recall: z
+    .object({
+      mode: z.enum(["stateAware", "legacy"]),
     })
     .optional(),
   disableHistory: z.boolean().optional(),

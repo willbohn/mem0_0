@@ -1,6 +1,11 @@
 import { SearchFilters, VectorStoreResult } from "../types";
 
 export interface VectorStore {
+  /**
+   * True only when list(filters, topK) returns a true scoped total, allowing
+   * callers to prove that a page below their safety bound is complete.
+   */
+  readonly supportsCompleteScopedList?: boolean;
   insert(
     vectors: number[][],
     ids: string[],
@@ -25,6 +30,11 @@ export interface VectorStore {
   delete(vectorId: string): Promise<void>;
   deleteCol(): Promise<void>;
   list(
+    filters?: SearchFilters,
+    topK?: number,
+  ): Promise<[VectorStoreResult[], number]>;
+  /** Optional exact-count variant used by state-aware lifecycle operations. */
+  listComplete?(
     filters?: SearchFilters,
     topK?: number,
   ): Promise<[VectorStoreResult[], number]>;

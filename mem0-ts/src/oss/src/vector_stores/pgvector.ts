@@ -212,6 +212,7 @@ function buildClientConfig(
 }
 
 export class PGVector implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private client: ClientType;
   private collectionName: string;
   private useDiskann: boolean;

@@ -64,6 +64,7 @@ function escapeWildcard(value: string): string {
 }
 
 export class OpenSearchDB implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private client!: Client;
   private readonly config: OpenSearchConfig;
   private readonly collectionName: string;

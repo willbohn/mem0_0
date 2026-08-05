@@ -83,15 +83,16 @@ const memory = new Memory({
     provider: "qdrant",
     config: { host: "localhost", port: 6333, collectionName: "memories" },
   },
+  recall: { mode: "stateAware" },
 });
 ```
 </CodeGroup>
 
 <Note>
-  Python OSS uses state-aware recall by default. Set `"recall": {"mode": "legacy"}` to preserve the previous dense-candidate ordering, additive score calculation, and semantic pre-threshold behavior while you compare results. The lifecycle rollout is Python-only until the benchmark gates are met; TypeScript OSS continues to use its existing behavior.
+  Python and TypeScript OSS use state-aware recall by default. Set `"recall": {"mode": "legacy"}` in Python or `recall: { mode: "legacy" }` in TypeScript to preserve the previous dense-candidate ordering, additive score calculation, and semantic pre-threshold behavior while you compare results.
 </Note>
 
-State-like writes require a vector provider that can prove complete, identity-scoped predecessor enumeration below the lifecycle safety bound. Providers opt into that contract explicitly; unproven providers fail before embedding or persistence instead of leaving multiple active state heads. Event writes and legacy mode remain available.
+State-like writes require a vector provider that can prove complete, identity-scoped predecessor enumeration below the lifecycle safety bound. Python providers opt into that contract explicitly; TypeScript providers must return a complete row count from `list()`. Unproven or truncated listings fail before persistence instead of leaving multiple active state heads. Event writes and legacy mode remain available.
 
 Set your provider keys as environment variables:
 

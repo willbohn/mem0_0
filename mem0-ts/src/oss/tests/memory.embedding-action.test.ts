@@ -56,6 +56,7 @@ function createMemory(): Memory {
       config: { apiKey: "test-key", model: "gpt-5-mini" },
     },
     historyDbPath: ":memory:",
+    recall: { mode: "legacy" },
   });
 }
 

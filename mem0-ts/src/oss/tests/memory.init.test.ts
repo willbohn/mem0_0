@@ -65,13 +65,18 @@ function createMemory(overrides: Partial<MemoryConfig> = {}): Memory {
     },
     vectorStore: {
       provider: "memory",
-      config: { collectionName: "test-init", dimension: 1536 },
+      config: {
+        collectionName: "test-init",
+        dimension: 1536,
+        dbPath: ":memory:",
+      },
     },
     llm: {
       provider: "openai",
       config: { apiKey: "test-key", model: "gpt-5-mini" },
     },
     historyDbPath: ":memory:",
+    recall: { mode: "legacy" },
     ...overrides,
   });
 }

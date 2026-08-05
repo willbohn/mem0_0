@@ -64,6 +64,7 @@ const KEY_MAP: Record<string, string> = {
 };
 
 export class Qdrant implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private client!: QdrantClient;
   private readonly config: QdrantConfig;
   private readonly collectionName: string;
@@ -470,13 +471,24 @@ export class Qdrant implements VectorStore {
       this.collectionName,
       scrollRequest,
     );
-
     const results = response.points.map((point) => ({
       id: String(point.id),
       payload: (point.payload as Record<string, any>) || {},
     }));
 
     return [results, response.points.length];
+  }
+
+  async listComplete(
+    filters?: SearchFilters,
+    topK: number = 100,
+  ): Promise<[VectorStoreResult[], number]> {
+    const [results] = await this.list(filters, topK);
+    const count = await this.client.count(this.collectionName, {
+      filter: this.createFilter(filters),
+      exact: true,
+    });
+    return [results, count.count];
   }
 
   private generateUUID(): string {

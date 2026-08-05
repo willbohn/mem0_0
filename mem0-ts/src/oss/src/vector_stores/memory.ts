@@ -15,6 +15,7 @@ interface MemoryVector {
 }
 
 export class MemoryVectorStore implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private db: Database.Database;
   private dimension: number;
   private dbPath: string;

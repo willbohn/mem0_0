@@ -43,6 +43,24 @@ export interface SearchMemoryOptions {
   rerank?: boolean;
   /** Include expired memories in the results. Defaults to false. */
   showExpired?: boolean;
+  /** Deterministic maximum number of memory-content characters returned. */
+  maxChars?: number;
+}
+
+export type FeedbackSignal = "helpful" | "irrelevant" | "stale" | "incorrect";
+
+export interface QualityOperationOptions {
+  limit?: number;
+}
+
+export interface ConsolidateMemoryOptions extends QualityOperationOptions {
+  dryRun?: boolean;
+  strategy?: "safe";
+}
+
+export interface FeedbackMemoryOptions {
+  signal: FeedbackSignal;
+  replacementId?: string;
 }
 
 export interface GetAllMemoryOptions {

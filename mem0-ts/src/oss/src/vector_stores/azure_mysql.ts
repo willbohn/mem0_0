@@ -46,6 +46,7 @@ interface AzureMySQLConfig extends VectorStoreConfig {
 }
 
 export class AzureMySQLDB implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private pool?: Pool;
   private readonly collectionName: string;
   private readonly config: AzureMySQLConfig;

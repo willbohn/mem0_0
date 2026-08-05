@@ -282,6 +282,13 @@ describe("Qdrant – backward compat with mocked client", () => {
           });
           return { points: results.slice(0, opts.limit) };
         }),
+      count: jest.fn().mockImplementation(async (collName: string) => {
+        let count = 0;
+        points.forEach((_pt, key) => {
+          if (key.startsWith(`${collName}:`)) count += 1;
+        });
+        return { count };
+      }),
       delete: jest
         .fn()
         .mockImplementation(async (collName: string, opts: any) => {
@@ -373,6 +380,13 @@ describe("Qdrant – backward compat with mocked client", () => {
     // List
     const [listed, count] = await store.list();
     expect(listed.length).toBeGreaterThan(0);
+    const [limited, exactCount] = await store.listComplete(undefined, 1);
+    expect(limited).toHaveLength(1);
+    expect(exactCount).toBe(2);
+    expect(mockClient.count).toHaveBeenCalledWith("test", {
+      filter: undefined,
+      exact: true,
+    });
 
     // Delete
     await store.delete("id-2");

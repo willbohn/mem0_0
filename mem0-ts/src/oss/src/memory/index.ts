@@ -8,6 +8,7 @@ import {
   SearchFilters,
   SearchResult,
   VectorStoreConfig,
+  VectorStoreResult,
 } from "../types";
 import {
   EmbedderFactory,
@@ -41,7 +42,23 @@ import {
   GetAllMemoryOptions,
   UpdateMemoryOptions,
   UpdateProjectOptions,
+  QualityOperationOptions,
+  ConsolidateMemoryOptions,
+  FeedbackMemoryOptions,
 } from "./memory.types";
+import {
+  auditRows,
+  buildLifecycleMetadata,
+  historicalQueryWindow,
+  internalPrefix,
+  isHistoricalQuery,
+  lexicalFallbackResults,
+  reciprocalRankFusion,
+  safeConsolidationActions,
+  schemaVersion,
+  stateLikeKinds,
+  stripInternalMetadata,
+} from "./lifecycle";
 import { parse_vision_messages } from "../utils/memory";
 import { HistoryManager } from "../storage/base";
 import { captureClientEvent } from "../utils/telemetry";
@@ -73,7 +90,6 @@ import {
   getBm25Params,
   normalizeBm25,
   ENTITY_BOOST_WEIGHT,
-  ScoredResult,
 } from "../utils/scoring";
 import { getDefaultVectorStoreDbPath } from "../utils/sqlite";
 import { logger } from "../utils/logger";
@@ -86,6 +102,22 @@ export class LLMError extends Error {
   constructor(message: string, options: { cause?: unknown } = {}) {
     super(message);
     this.name = "LLMError";
+    this.cause = options.cause;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class MemoryPersistenceError extends Error {
+  readonly plannedIds: string[];
+  readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    options: { plannedIds?: string[]; cause?: unknown } = {},
+  ) {
+    super(message);
+    this.name = "MemoryPersistenceError";
+    this.plannedIds = options.plannedIds ?? [];
     this.cause = options.cause;
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -160,7 +192,11 @@ function validateAndTrimEntityId(
  * Validates search parameters.
  * @throws Error if threshold or topK are invalid
  */
-function validateSearchParams(threshold?: number, topK?: number): void {
+function validateSearchParams(
+  threshold?: number,
+  topK?: number,
+  maxChars?: number,
+): void {
   if (threshold !== undefined) {
     if (typeof threshold !== "number" || isNaN(threshold)) {
       throw new Error("threshold must be a valid number");
@@ -177,6 +213,16 @@ function validateSearchParams(threshold?: number, topK?: number): void {
     }
     if (topK < 0) {
       throw new Error(`Invalid topK: ${topK}. Must be a non-negative integer.`);
+    }
+  }
+  if (maxChars !== undefined) {
+    if (
+      typeof maxChars !== "number" ||
+      isNaN(maxChars) ||
+      !Number.isInteger(maxChars) ||
+      maxChars < 0
+    ) {
+      throw new Error("maxChars must be a non-negative integer");
     }
   }
 }
@@ -689,6 +735,133 @@ export class Memory {
     throw new Error("Project updates are not supported by the OSS Memory SDK.");
   }
 
+  private recallMode(): "stateAware" | "legacy" {
+    return this.config.recall?.mode ?? "stateAware";
+  }
+
+  private async persistVerifiedBatch(
+    vectors: number[][],
+    ids: string[],
+    payloads: Record<string, any>[],
+  ): Promise<void> {
+    try {
+      await this.vectorStore.insert(vectors, ids, payloads);
+      const persisted = await Promise.all(
+        ids.map((id) => this.vectorStore.get(id)),
+      );
+      if (persisted.some((row) => row === null)) {
+        throw new MemoryPersistenceError(
+          "Memory provider silently persisted only part of the planned batch",
+          { plannedIds: ids },
+        );
+      }
+    } catch (cause) {
+      await Promise.allSettled(ids.map((id) => this.vectorStore.delete(id)));
+      if (cause instanceof MemoryPersistenceError) throw cause;
+      throw new MemoryPersistenceError(
+        "Memory batch persistence failed; all planned IDs were rolled back",
+        { plannedIds: ids, cause },
+      );
+    }
+  }
+
+  private async replacePayload(
+    memoryId: string,
+    payload: Record<string, any>,
+  ): Promise<void> {
+    const text = payload.data;
+    if (typeof text !== "string" || !text) {
+      throw new MemoryPersistenceError(
+        `Memory ${memoryId} cannot be updated because its stored content is missing`,
+        { plannedIds: [memoryId] },
+      );
+    }
+    const vector = await this.embedder.embed(text, "update");
+    await this.vectorStore.update(memoryId, vector, payload);
+  }
+
+  private payloadMatchesFilters(
+    payload: Record<string, any>,
+    filters: SearchFilters,
+  ): boolean {
+    return Object.entries(filters).every(([key, expected]) => {
+      if (
+        key.startsWith("$") ||
+        (expected !== null && typeof expected === "object")
+      ) {
+        return false;
+      }
+      return expected === "*" ? key in payload : payload[key] === expected;
+    });
+  }
+
+  private async lifecycleCandidates(
+    filters: SearchFilters,
+    limit = 1000,
+  ): Promise<Array<{ id: string; payload: Record<string, any> }>> {
+    if (this.vectorStore.supportsCompleteScopedList !== true) {
+      throw new MemoryPersistenceError(
+        "State transition candidate discovery requires provider complete-list capability",
+      );
+    }
+    let rows: Array<{ id: string; payload: Record<string, any> }>;
+    let total: number;
+    try {
+      [rows, total] = await this.completeScopeList(filters, limit);
+    } catch (cause) {
+      throw new MemoryPersistenceError(
+        "State transition candidate discovery failed",
+        { cause },
+      );
+    }
+    if (
+      !Array.isArray(rows) ||
+      typeof total !== "number" ||
+      total !== rows.length
+    ) {
+      throw new MemoryPersistenceError(
+        "State transition candidate discovery was incomplete",
+      );
+    }
+    if (rows.length >= limit) {
+      throw new MemoryPersistenceError(
+        "State transition candidate discovery reached its safety limit",
+      );
+    }
+    if (rows.some((row) => !this.payloadMatchesFilters(row.payload, filters))) {
+      throw new MemoryPersistenceError(
+        "State transition candidate discovery escaped the identity scope",
+      );
+    }
+    return rows
+      .filter(
+        (row) =>
+          row.payload?._mem0_schema_version === schemaVersion &&
+          row.payload?._mem0_state_key &&
+          stateLikeKinds.has(row.payload?._mem0_kind) &&
+          ["active", "disputed", "superseded"].includes(
+            row.payload?._mem0_status ?? "active",
+          ),
+      )
+      .map((row) => ({ id: String(row.id), payload: { ...row.payload } }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private async completeScopeList(
+    filters: SearchFilters,
+    limit: number,
+  ): Promise<[VectorStoreResult[], number]> {
+    if (this.vectorStore.supportsCompleteScopedList !== true) {
+      throw new MemoryPersistenceError(
+        "Provider complete-list capability is required",
+      );
+    }
+    if (typeof this.vectorStore.listComplete === "function") {
+      return this.vectorStore.listComplete(filters, limit);
+    }
+    return this.vectorStore.list(filters, limit);
+  }
+
   async add(
     messages: string | Message[],
     config: AddMemoryOptions,
@@ -740,7 +913,12 @@ export class Memory {
       has_filters: !!config.filters,
       infer: config.infer,
     });
-    const { metadata = {}, filters = {}, infer = true } = config;
+    const {
+      metadata: callerMetadata = {},
+      filters = {},
+      infer = true,
+    } = config;
+    const metadata = stripInternalMetadata(callerMetadata);
 
     // Validate and trim entity IDs
     const userId = validateAndTrimEntityId(config.userId, "userId");
@@ -810,6 +988,84 @@ export class Memory {
     infer: boolean,
   ): Promise<MemoryItem[]> {
     if (!infer) {
+      if (this.recallMode() === "stateAware") {
+        const eligible = messages
+          .map((message, messageIndex) => ({ message, messageIndex }))
+          .filter(
+            ({ message }) =>
+              message.role !== "system" &&
+              typeof message.content === "string" &&
+              message.content.length > 0,
+          );
+        const texts = eligible.map(({ message }) => message.content as string);
+        if (texts.length === 0) return [];
+        let vectors: number[][];
+        try {
+          vectors = await this.embedder.embedBatch(texts, "add");
+        } catch (cause) {
+          throw new MemoryPersistenceError(
+            "Failed to produce a complete embedding batch before persistence",
+            { cause },
+          );
+        }
+        if (
+          vectors.length !== texts.length ||
+          vectors.some((vector) => !Array.isArray(vector))
+        ) {
+          throw new MemoryPersistenceError(
+            "Failed to produce a complete embedding batch before persistence",
+          );
+        }
+
+        const ids = eligible.map(() => uuidv4());
+        const payloads = eligible.map(({ message, messageIndex }, index) => {
+          const text = texts[index];
+          const now = new Date().toISOString();
+          return {
+            ...metadata,
+            ...buildLifecycleMetadata(
+              {
+                kind: "event",
+                value: text,
+                evidence: { message_index: messageIndex, excerpt: text },
+              },
+              messages,
+            ),
+            data: text,
+            hash: createHash("md5").update(text).digest("hex"),
+            textLemmatized: lemmatizeForBm25(text),
+            createdAt: now,
+            updatedAt: now,
+          };
+        });
+        await this.persistVerifiedBatch(vectors, ids, payloads);
+        try {
+          await Promise.all(
+            ids.map((id, index) =>
+              this.db.addHistory(
+                id,
+                null,
+                texts[index],
+                "ADD",
+                payloads[index].createdAt,
+              ),
+            ),
+          );
+        } catch (cause) {
+          await Promise.allSettled(
+            ids.map((id) => this.vectorStore.delete(id)),
+          );
+          throw new MemoryPersistenceError(
+            "History persistence failed; vector writes were rolled back",
+            { plannedIds: ids, cause },
+          );
+        }
+        return ids.map((id, index) => ({
+          id,
+          memory: texts[index],
+          metadata: { event: "ADD" },
+        }));
+      }
       const returnedMemories: MemoryItem[] = [];
       for (const message of messages) {
         if (message.role === "system") {
@@ -845,13 +1101,36 @@ export class Memory {
         // getLastMessages not supported — proceed without context
       }
     }
+    if (this.recallMode() === "stateAware") {
+      lastMessages = lastMessages.filter(
+        (message) =>
+          message.role !== "system" && typeof message.content === "string",
+      );
+    }
     // Preserve role on the messages being extracted so the prompt's role-aware
     // logic and the required `attributed_to` output have the speaker to work
     // with. Matches the Python oss `parse_messages` helper (`role: content`);
     // without this, assistant statements get attributed to the user.
-    const parsedMessages = messages
-      .map((m) => `${m.role}: ${m.content}`)
-      .join("\n");
+    const eligibleMessages = messages.filter(
+      (message) =>
+        message.role !== "system" && typeof message.content === "string",
+    );
+    const parsedMessages =
+      this.recallMode() === "stateAware"
+        ? JSON.stringify(
+            messages
+              .map((message, messageIndex) => ({
+                message_index: messageIndex,
+                role: message.role,
+                content: message.content,
+              }))
+              .filter(
+                (message) =>
+                  message.role !== "system" &&
+                  typeof message.content === "string",
+              ),
+          )
+        : messages.map((m) => `${m.role}: ${m.content}`).join("\n");
 
     // Phase 1: Existing memory retrieval
     const queryEmbedding = await this.embedder.embed(parsedMessages, "search");
@@ -907,6 +1186,16 @@ export class Memory {
       text?: string;
       attributed_to?: string;
       linked_memory_ids?: string[];
+      kind?: string;
+      subject?: string;
+      predicate?: string;
+      value?: unknown;
+      evidence?: { message_index: number; excerpt: string };
+      evidence_strength?: number;
+      relation?: string;
+      valid_from?: string;
+      valid_to?: string;
+      _mem0Lifecycle?: Record<string, any>;
     }> = [];
     try {
       const cleanResponse = extractJson(response);
@@ -926,12 +1215,27 @@ export class Memory {
       extractedMemories = [];
     }
 
+    if (this.recallMode() === "stateAware") {
+      extractedMemories = extractedMemories.flatMap((memory) => {
+        try {
+          const lifecycle = buildLifecycleMetadata(memory, messages);
+          lifecycle._mem0_related_to = (lifecycle._mem0_related_to ?? [])
+            .map((linkedId: string) => uuidMapping[linkedId])
+            .filter(Boolean);
+          return [{ ...memory, _mem0Lifecycle: lifecycle }];
+        } catch (error) {
+          console.warn(`Skipping ungrounded memory extraction: ${error}`);
+          return [];
+        }
+      });
+    }
+
     if (extractedMemories.length === 0) {
       // Save messages even if nothing extracted
       if (typeof this.db.saveMessages === "function") {
         try {
           await this.db.saveMessages(
-            messages.map((m) => ({
+            eligibleMessages.map((m) => ({
               role: m.role,
               content: m.content as string,
             })),
@@ -942,6 +1246,55 @@ export class Memory {
       return [];
     }
 
+    let lifecycleCandidates: Array<{
+      id: string;
+      payload: Record<string, any>;
+    }> = [];
+    if (this.recallMode() === "stateAware") {
+      const stateMemories = extractedMemories.filter((memory) =>
+        stateLikeKinds.has(memory._mem0Lifecycle?._mem0_kind),
+      );
+      if (
+        stateMemories.some((memory) => !memory._mem0Lifecycle?._mem0_state_key)
+      ) {
+        throw new MemoryPersistenceError(
+          "State-like extraction requires a normalized state key",
+        );
+      }
+      if (stateMemories.length > 0) {
+        lifecycleCandidates = await this.lifecycleCandidates(filters);
+        for (const memory of stateMemories) {
+          const lifecycle = memory._mem0Lifecycle!;
+          if (
+            !["supersedes", "corroborates", "conflicts_with"].includes(
+              lifecycle._mem0_relation,
+            )
+          ) {
+            continue;
+          }
+          const related = new Set<string>(lifecycle._mem0_related_to ?? []);
+          const linkedKeys = new Set(
+            lifecycleCandidates
+              .filter(
+                (candidate) =>
+                  related.has(candidate.id) &&
+                  candidate.payload._mem0_kind === lifecycle._mem0_kind,
+              )
+              .map((candidate) => candidate.payload._mem0_state_key)
+              .filter(Boolean),
+          );
+          if (linkedKeys.size > 1) {
+            throw new MemoryPersistenceError(
+              "Linked state transition spans multiple canonical state keys",
+            );
+          }
+          if (linkedKeys.size === 1) {
+            lifecycle._mem0_state_key = [...linkedKeys][0];
+          }
+        }
+      }
+    }
+
     // Phase 3: Batch embed all extracted memory texts
     const memTexts = extractedMemories
       .map((m) => m.text ?? "")
@@ -949,11 +1302,25 @@ export class Memory {
     let embedMap: Record<string, number[]> = {};
     try {
       const memEmbeddingsList = await this.embedder.embedBatch(memTexts, "add");
+      if (
+        memEmbeddingsList.length !== memTexts.length ||
+        memEmbeddingsList.some((vector) => !Array.isArray(vector))
+      ) {
+        throw new Error(
+          `embedBatch returned ${memEmbeddingsList.length} vectors for ${memTexts.length} texts`,
+        );
+      }
       for (let i = 0; i < memTexts.length; i++) {
         embedMap[memTexts[i]] = memEmbeddingsList[i];
       }
-    } catch {
-      // Fallback: embed individually
+    } catch (cause) {
+      if (this.recallMode() === "stateAware") {
+        throw new MemoryPersistenceError(
+          "Failed to produce a complete embedding batch before persistence",
+          { cause },
+        );
+      }
+      // Legacy mode preserves the former best-effort individual fallback.
       for (const text of memTexts) {
         try {
           embedMap[text] = await this.embedder.embed(text, "add");
@@ -977,16 +1344,77 @@ export class Memory {
       payload: Record<string, any>;
     }> = [];
     const seenHashes = new Set<string>();
+    const predecessorUpdates: Array<{
+      memoryId: string;
+      oldPayload: Record<string, any>;
+      newPayload: Record<string, any>;
+    }> = [];
+    const corroboratedResults: MemoryItem[] = [];
 
     for (const mem of extractedMemories) {
       const text = mem.text;
       if (!text || !(text in embedMap)) continue;
 
-      const memHash = createHash("md5").update(text).digest("hex");
-      if (existingHashes.has(memHash) || seenHashes.has(memHash)) {
+      const lifecycle = { ...(mem._mem0Lifecycle ?? {}) };
+      const stateKey = lifecycle._mem0_state_key;
+      const sameState = stateKey
+        ? lifecycleCandidates.filter(
+            (candidate) =>
+              candidate.payload._mem0_state_key === stateKey &&
+              ["active", "disputed"].includes(
+                candidate.payload._mem0_status ?? "active",
+              ),
+          )
+        : [];
+      const canonical = sameState.find(
+        (candidate) => candidate.payload._mem0_value === lifecycle._mem0_value,
+      );
+      if (
+        this.recallMode() === "stateAware" &&
+        stateLikeKinds.has(lifecycle._mem0_kind) &&
+        canonical
+      ) {
+        const corroboratedPayload = { ...canonical.payload };
+        corroboratedPayload._mem0_source_hashes = [
+          ...new Set([
+            ...(corroboratedPayload._mem0_source_hashes ?? []),
+            ...(lifecycle._mem0_source_hashes ?? []),
+          ]),
+        ].sort();
+        corroboratedPayload._mem0_source_message_indexes = [
+          ...new Set([
+            ...(corroboratedPayload._mem0_source_message_indexes ?? []),
+            ...(lifecycle._mem0_source_message_indexes ?? []),
+          ]),
+        ].sort((left, right) => left - right);
+        corroboratedPayload._mem0_evidence_strength = Math.min(
+          1,
+          Number(corroboratedPayload._mem0_evidence_strength ?? 0.5) +
+            0.1 * Number(lifecycle._mem0_evidence_strength ?? 1),
+        );
+        predecessorUpdates.push({
+          memoryId: canonical.id,
+          oldPayload: { ...canonical.payload },
+          newPayload: corroboratedPayload,
+        });
+        canonical.payload = { ...corroboratedPayload };
+        corroboratedResults.push({
+          id: canonical.id,
+          memory: String(canonical.payload.data ?? text),
+          metadata: { event: "NONE" },
+        });
         continue;
       }
-      seenHashes.add(memHash);
+
+      const memHash = createHash("md5").update(text).digest("hex");
+      const isEvent = lifecycle._mem0_kind === "event";
+      if (
+        !isEvent &&
+        (existingHashes.has(memHash) || seenHashes.has(memHash))
+      ) {
+        continue;
+      }
+      if (!isEvent) seenHashes.add(memHash);
 
       const textLemmatized = lemmatizeForBm25(text);
       const memoryId = uuidv4();
@@ -994,6 +1422,7 @@ export class Memory {
 
       const memPayload: Record<string, any> = {
         ...metadata,
+        ...lifecycle,
         data: text,
         textLemmatized,
         hash: memHash,
@@ -1007,19 +1436,99 @@ export class Memory {
       if (filters.agent_id) memPayload.agent_id = filters.agent_id;
       if (filters.run_id) memPayload.run_id = filters.run_id;
 
+      if (stateKey && memPayload._mem0_valid_from === undefined) {
+        memPayload._mem0_valid_from = now;
+      }
+      if (
+        this.recallMode() === "stateAware" &&
+        stateLikeKinds.has(lifecycle._mem0_kind) &&
+        lifecycle._mem0_relation === "supersedes" &&
+        sameState.length > 0
+      ) {
+        memPayload._mem0_supersedes = sameState
+          .map((candidate) => candidate.id)
+          .sort();
+        for (const candidate of sameState) {
+          const updated = {
+            ...candidate.payload,
+            _mem0_status: "superseded",
+            _mem0_valid_to: now,
+            _mem0_superseded_by: memoryId,
+          };
+          predecessorUpdates.push({
+            memoryId: candidate.id,
+            oldPayload: { ...candidate.payload },
+            newPayload: updated,
+          });
+          candidate.payload = { ...updated };
+        }
+      } else if (
+        this.recallMode() === "stateAware" &&
+        stateLikeKinds.has(lifecycle._mem0_kind) &&
+        sameState.length > 0
+      ) {
+        memPayload._mem0_status = "disputed";
+        memPayload._mem0_conflicts_with = sameState
+          .map((candidate) => candidate.id)
+          .sort();
+        for (const candidate of sameState) {
+          const updated = {
+            ...candidate.payload,
+            _mem0_status: "disputed",
+            _mem0_conflicts_with: [
+              ...new Set([
+                ...(candidate.payload._mem0_conflicts_with ?? []),
+                memoryId,
+              ]),
+            ].sort(),
+          };
+          predecessorUpdates.push({
+            memoryId: candidate.id,
+            oldPayload: { ...candidate.payload },
+            newPayload: updated,
+          });
+          candidate.payload = { ...updated };
+        }
+      }
+
       records.push({
         memoryId,
         text,
         embedding: embedMap[text],
         payload: memPayload,
       });
+      if (stateKey) {
+        lifecycleCandidates.push({ id: memoryId, payload: { ...memPayload } });
+      }
     }
 
     if (records.length === 0) {
+      const applied: typeof predecessorUpdates = [];
+      try {
+        for (const update of predecessorUpdates) {
+          await this.replacePayload(update.memoryId, update.newPayload);
+          applied.push(update);
+        }
+      } catch (cause) {
+        await Promise.allSettled(
+          applied
+            .reverse()
+            .map((update) =>
+              this.replacePayload(update.memoryId, update.oldPayload),
+            ),
+        );
+        throw new MemoryPersistenceError(
+          "Memory corroboration persistence failed; prior payloads were restored",
+          {
+            plannedIds: predecessorUpdates.map((update) => update.memoryId),
+            cause,
+          },
+        );
+      }
       if (typeof this.db.saveMessages === "function") {
         try {
           await this.db.saveMessages(
-            messages.map((m) => ({
+            eligibleMessages.map((m) => ({
               role: m.role,
               content: m.content as string,
             })),
@@ -1027,7 +1536,7 @@ export class Memory {
           );
         } catch {}
       }
-      return [];
+      return corroboratedResults;
     }
 
     // Phase 6: Batch persist
@@ -1035,19 +1544,45 @@ export class Memory {
     const allIds = records.map((r) => r.memoryId);
     const allPayloads = records.map((r) => r.payload);
 
-    try {
-      await this.vectorStore.insert(allVectors, allIds, allPayloads);
-    } catch {
-      // Fallback: insert one by one
-      for (let i = 0; i < allIds.length; i++) {
-        try {
-          await this.vectorStore.insert(
-            [allVectors[i]],
-            [allIds[i]],
-            [allPayloads[i]],
-          );
-        } catch (e) {
-          console.error(`Failed to insert memory ${allIds[i]}: ${e}`);
+    if (this.recallMode() === "stateAware") {
+      await this.persistVerifiedBatch(allVectors, allIds, allPayloads);
+      const applied: typeof predecessorUpdates = [];
+      try {
+        for (const update of predecessorUpdates) {
+          await this.replacePayload(update.memoryId, update.newPayload);
+          applied.push(update);
+        }
+      } catch (cause) {
+        await Promise.allSettled(
+          allIds.map((id) => this.vectorStore.delete(id)),
+        );
+        await Promise.allSettled(
+          applied
+            .reverse()
+            .map((update) =>
+              this.replacePayload(update.memoryId, update.oldPayload),
+            ),
+        );
+        throw new MemoryPersistenceError(
+          "State transition persistence failed; new memories were rolled back",
+          { plannedIds: allIds, cause },
+        );
+      }
+    } else {
+      try {
+        await this.vectorStore.insert(allVectors, allIds, allPayloads);
+      } catch {
+        // Legacy mode preserves the former best-effort individual fallback.
+        for (let i = 0; i < allIds.length; i++) {
+          try {
+            await this.vectorStore.insert(
+              [allVectors[i]],
+              [allIds[i]],
+              [allPayloads[i]],
+            );
+          } catch (e) {
+            console.error(`Failed to insert memory ${allIds[i]}: ${e}`);
+          }
         }
       }
     }
@@ -1063,7 +1598,36 @@ export class Memory {
       isDeleted: 0,
     }));
 
-    if (typeof this.db.batchAddHistory === "function") {
+    if (this.recallMode() === "stateAware") {
+      try {
+        if (typeof this.db.batchAddHistory === "function") {
+          await this.db.batchAddHistory(historyRecords);
+        } else {
+          for (const hr of historyRecords) {
+            await this.db.addHistory(
+              hr.memoryId,
+              null,
+              hr.newValue,
+              "ADD",
+              hr.createdAt,
+            );
+          }
+        }
+      } catch (cause) {
+        await Promise.allSettled(
+          allIds.map((id) => this.vectorStore.delete(id)),
+        );
+        await Promise.allSettled(
+          predecessorUpdates.map((update) =>
+            this.replacePayload(update.memoryId, update.oldPayload),
+          ),
+        );
+        throw new MemoryPersistenceError(
+          "History persistence failed; vector writes were rolled back",
+          { plannedIds: allIds, cause },
+        );
+      }
+    } else if (typeof this.db.batchAddHistory === "function") {
       try {
         await this.db.batchAddHistory(historyRecords);
       } catch {
@@ -1238,7 +1802,7 @@ export class Memory {
     if (typeof this.db.saveMessages === "function") {
       try {
         await this.db.saveMessages(
-          messages.map((m) => ({
+          eligibleMessages.map((m) => ({
             role: m.role,
             content: m.content as string,
           })),
@@ -1290,7 +1854,7 @@ export class Memory {
       "attributedTo",
     ]);
     for (const [key, value] of Object.entries(memory.payload)) {
-      if (!excludedKeys.has(key)) {
+      if (!excludedKeys.has(key) && !key.startsWith(internalPrefix)) {
         memoryItem.metadata![key] = value;
       }
     }
@@ -1329,7 +1893,7 @@ export class Memory {
     rejectTopLevelEntityParams(config as Record<string, any>, "search");
 
     // Validate search parameters (before applying defaults)
-    validateSearchParams(config.threshold, config.topK);
+    validateSearchParams(config.threshold, config.topK, config.maxChars);
 
     // Validate and trim entity IDs in filters. Only include keys whose
     // validated value is defined — otherwise downstream vector stores
@@ -1448,6 +2012,7 @@ export class Memory {
 
     // Step 6: Compute entity boosts
     const entityBoosts: Record<string, number> = {};
+    const entityMemoryIds = new Set<string>();
     if (queryEntities.length > 0) {
       try {
         // Deduplicate entities (max 8)
@@ -1511,6 +2076,7 @@ export class Memory {
                 for (const memoryId of linkedMemoryIds) {
                   if (memoryId) {
                     const memKey = String(memoryId);
+                    entityMemoryIds.add(memKey);
                     entityBoosts[memKey] = Math.max(
                       entityBoosts[memKey] ?? 0,
                       boost,
@@ -1535,15 +2101,79 @@ export class Memory {
         payload: mem.payload || {},
       }));
 
-    // Step 8: Score and rank
-    const scoredResults = scoreAndRank(
-      candidates,
-      bm25Scores,
-      entityBoosts,
-      threshold ?? 0.1,
-      topK,
-      explain,
-    );
+    // Step 8: Score and rank. Legacy mode intentionally keeps the former
+    // semantic-only candidate pool and pre-fusion threshold semantics.
+    let scoredResults: Array<{
+      id: string;
+      score: number;
+      payload: Record<string, any>;
+      scoreDetails?: Record<string, any>;
+    }>;
+    if (this.recallMode() === "legacy") {
+      scoredResults = scoreAndRank(
+        candidates,
+        bm25Scores,
+        entityBoosts,
+        threshold ?? 0.1,
+        topK,
+        explain,
+      );
+    } else {
+      if (keywordResults === null) {
+        try {
+          if (this.vectorStore.supportsCompleteScopedList !== true) {
+            throw new Error("complete scoped listing is unavailable");
+          }
+          const [listed, total] = await this.completeScopeList(
+            effectiveFilters,
+            internalLimit,
+          );
+          keywordResults =
+            total === listed.length
+              ? lexicalFallbackResults(query, listed, {
+                  topK: internalLimit,
+                })
+              : [];
+        } catch {
+          keywordResults = [];
+        }
+      }
+      const entityResults = (
+        await Promise.all(
+          [...entityMemoryIds]
+            .sort(
+              (left, right) =>
+                (entityBoosts[right] ?? 0) - (entityBoosts[left] ?? 0) ||
+                left.localeCompare(right),
+            )
+            .map((memoryId) => this.vectorStore.get(memoryId)),
+        )
+      )
+        .filter((row): row is VectorStoreResult => row !== null)
+        .filter((row) =>
+          this.payloadMatchesFilters(row.payload, effectiveFilters),
+        );
+      const visible = <T extends { payload: Record<string, any> }>(rows: T[]) =>
+        rows.filter(
+          (row) => showExpired || !payloadIsExpired(row.payload ?? {}),
+        );
+      const historical = isHistoricalQuery(query);
+      scoredResults = reciprocalRankFusion(
+        {
+          semantic: visible(candidates),
+          keyword: visible(keywordResults ?? []),
+          entity: visible(entityResults),
+        },
+        {
+          threshold: threshold ?? 0.1,
+          topK,
+          historical,
+          historicalWindow: historicalQueryWindow(query),
+          maxChars: config.maxChars,
+          explain,
+        },
+      );
+    }
 
     // Step 9: Format results
     const excludedKeys = new Set([
@@ -1570,7 +2200,10 @@ export class Memory {
           updatedAt: payload.updatedAt,
           score: scored.score,
           metadata: Object.entries(payload)
-            .filter(([key]) => !excludedKeys.has(key))
+            .filter(
+              ([key]) =>
+                !excludedKeys.has(key) && !key.startsWith(internalPrefix),
+            )
             .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {}),
           ...(payload.user_id && { user_id: payload.user_id }),
           ...(payload.agent_id && { agent_id: payload.agent_id }),
@@ -1639,6 +2272,183 @@ export class Memory {
     return result;
   }
 
+  private validateQualityFilters(
+    filters: SearchFilters,
+    limit: number,
+  ): SearchFilters {
+    validateSearchParams(undefined, limit);
+    const normalized = { ...filters };
+    for (const key of ["user_id", "agent_id", "run_id"] as const) {
+      if (normalized[key] !== undefined) {
+        normalized[key] = validateAndTrimEntityId(normalized[key], key);
+      }
+    }
+    if (!normalized.user_id && !normalized.agent_id && !normalized.run_id) {
+      throw new Error(
+        "filters must contain at least one of: user_id, agent_id, run_id",
+      );
+    }
+    return normalized;
+  }
+
+  async audit(
+    filters: SearchFilters,
+    options: QualityOperationOptions = {},
+  ): Promise<ReturnType<typeof auditRows>> {
+    await this._ensureInitialized();
+    const limit = options.limit ?? 1000;
+    const effectiveFilters = this.validateQualityFilters(filters, limit);
+    const [rows, total] =
+      this.vectorStore.supportsCompleteScopedList === true
+        ? await this.completeScopeList(effectiveFilters, limit)
+        : await this.vectorStore.list(effectiveFilters, limit);
+    const report = auditRows(rows);
+    if (
+      this.vectorStore.supportsCompleteScopedList !== true ||
+      typeof total !== "number" ||
+      total !== rows.length
+    ) {
+      report.issues.providerInconsistencies = [
+        ...new Set([
+          ...report.issues.providerInconsistencies,
+          "scope_listing_incomplete",
+        ]),
+      ];
+      report.summary.providerInconsistencies =
+        report.issues.providerInconsistencies.length;
+    }
+    return report;
+  }
+
+  async consolidate(
+    filters: SearchFilters,
+    options: ConsolidateMemoryOptions = {},
+  ): Promise<{
+    dryRun: boolean;
+    strategy: "safe";
+    scanned: number;
+    actions: ReturnType<typeof safeConsolidationActions>;
+    applied: number;
+  }> {
+    await this._ensureInitialized();
+    const { dryRun = true, strategy = "safe", limit = 1000 } = options;
+    if (strategy !== "safe") {
+      throw new Error("Only the safe consolidation strategy is supported");
+    }
+    const effectiveFilters = this.validateQualityFilters(filters, limit);
+    if (this.vectorStore.supportsCompleteScopedList !== true) {
+      throw new MemoryPersistenceError(
+        "Safe consolidation requires provider complete-list capability",
+      );
+    }
+    const [rows, total] = await this.completeScopeList(effectiveFilters, limit);
+    if (typeof total !== "number" || total !== rows.length) {
+      throw new MemoryPersistenceError(
+        "Safe consolidation requires a complete provider listing",
+      );
+    }
+    const actions = safeConsolidationActions(rows);
+    let applied = 0;
+    if (!dryRun) {
+      const changed: Array<{
+        memoryId: string;
+        oldPayload: Record<string, any>;
+      }> = [];
+      try {
+        for (const action of actions) {
+          const current = await this.vectorStore.get(action.memoryId);
+          if (!current) {
+            throw new MemoryPersistenceError(
+              `Consolidation target ${action.memoryId} no longer exists`,
+              { plannedIds: [action.memoryId] },
+            );
+          }
+          const status =
+            action.action === "archive" ? "archived" : "superseded";
+          await this.replacePayload(action.memoryId, {
+            ...current.payload,
+            _mem0_status: status,
+          });
+          changed.push({
+            memoryId: action.memoryId,
+            oldPayload: { ...current.payload },
+          });
+          applied += 1;
+        }
+      } catch (cause) {
+        const restored = await Promise.allSettled(
+          changed
+            .reverse()
+            .map((item) => this.replacePayload(item.memoryId, item.oldPayload)),
+        );
+        if (restored.some((result) => result.status === "rejected")) {
+          throw new MemoryPersistenceError(
+            "Safe consolidation failed and one or more applied actions could not be restored",
+            {
+              plannedIds: actions.map((action) => action.memoryId),
+              cause,
+            },
+          );
+        }
+        throw new MemoryPersistenceError(
+          "Safe consolidation failed; applied actions were restored",
+          {
+            plannedIds: actions.map((action) => action.memoryId),
+            cause,
+          },
+        );
+      }
+    }
+    return { dryRun, strategy, scanned: rows.length, actions, applied };
+  }
+
+  async feedback(
+    memoryId: string,
+    options: FeedbackMemoryOptions,
+  ): Promise<{ message: string }> {
+    await this._ensureInitialized();
+    if (
+      !["helpful", "irrelevant", "stale", "incorrect"].includes(options.signal)
+    ) {
+      throw new Error(
+        "signal must be one of: helpful, irrelevant, stale, incorrect",
+      );
+    }
+    const current = await this.vectorStore.get(memoryId);
+    if (!current) throw new Error(`Memory with ID ${memoryId} not found`);
+    const next = { ...current.payload };
+    const field = `_mem0_feedback_${options.signal}`;
+    next[field] = Number(next[field] ?? 0) + 1;
+    if (options.signal === "helpful") {
+      next._mem0_salience = Math.min(
+        1,
+        Number(next._mem0_salience ?? 0.5) + 0.1,
+      );
+    } else if (options.signal === "stale") {
+      next._mem0_status = "archived";
+    } else if (options.signal === "incorrect") {
+      next._mem0_status = "invalid";
+    }
+    if (options.replacementId) {
+      const replacement = await this.vectorStore.get(options.replacementId);
+      if (!replacement) {
+        throw new Error(
+          `Replacement memory with ID ${options.replacementId} not found`,
+        );
+      }
+      for (const key of ["user_id", "agent_id", "run_id"] as const) {
+        if (current.payload[key] !== replacement.payload[key]) {
+          throw new Error(
+            "Replacement memory must use the same identity scope",
+          );
+        }
+      }
+      next._mem0_replacement_id = options.replacementId;
+    }
+    await this.replacePayload(memoryId, next);
+    return { message: "Memory feedback recorded successfully!" };
+  }
+
   async update(
     memoryId: string,
     config: string | UpdateMemoryOptions,
@@ -1668,7 +2478,7 @@ export class Memory {
       );
     }
 
-    const updateMetadata: Record<string, any> = { ...metadata };
+    const updateMetadata: Record<string, any> = stripInternalMetadata(metadata);
     if (expirationDate !== undefined) {
       updateMetadata.expiration_date =
         expirationDate === null
@@ -1894,7 +2704,9 @@ export class Memory {
       createdAt: mem.payload.createdAt,
       updatedAt: mem.payload.updatedAt,
       metadata: Object.entries(mem.payload)
-        .filter(([key]) => !excludedKeys.has(key))
+        .filter(
+          ([key]) => !excludedKeys.has(key) && !key.startsWith(internalPrefix),
+        )
         .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {}),
       ...(mem.payload.user_id && { user_id: mem.payload.user_id }),
       ...(mem.payload.agent_id && { agent_id: mem.payload.agent_id }),
@@ -1966,6 +2778,17 @@ export class Memory {
       );
     }
     const textChanged = newData !== prevValue;
+    if (
+      this.recallMode() === "stateAware" &&
+      textChanged &&
+      existingMemory.payload._mem0_schema_version === schemaVersion &&
+      stateLikeKinds.has(existingMemory.payload._mem0_kind)
+    ) {
+      throw new MemoryPersistenceError(
+        "State-aware memories cannot be edited in place; add the correction as new evidence",
+        { plannedIds: [memoryId] },
+      );
+    }
 
     const embedding =
       existingEmbeddings[newData] ||

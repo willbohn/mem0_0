@@ -292,7 +292,9 @@ Accuracy and completeness are critical. Every piece of memorable information mus
 
 ## New Messages
 
-The current conversation turn(s) with "role" (user/assistant) and "content".
+The current evidence-eligible conversation turn(s), each with its original
+"message_index", "role" (user/assistant), and "content". System messages are
+never evidence sources.
 
 Both roles contain extractable information:
 - **User messages**: Personal facts, preferences, plans, experiences, things done / never done before, opinions, requests, implicit preferences revealed through questions
@@ -304,6 +306,10 @@ Do NOT extract:
 - Vague assistant characterizations ("you seem passionate", "that sounds stressful") unless the user explicitly confirms them
 - Generic assistant acknowledgments ("Sure!", "Great question!")
 - Assistant meta-commentary about its own capabilities
+
+Every returned memory must cite one exact, non-empty excerpt from a New
+Messages item. The excerpt must be an exact substring of that item's content;
+never cite Summary, Existing Memories, Last k Messages, or inferred context.
 
 
 ## Summary
@@ -779,6 +785,32 @@ export const AdditiveExtractionSchema = z.object({
       text: z.string(),
       attributed_to: z.enum(["user", "assistant"]).optional(),
       linked_memory_ids: z.array(z.string()).optional(),
+      kind: z
+        .enum([
+          "state",
+          "preference",
+          "event",
+          "plan",
+          "relationship",
+          "instruction",
+          "procedure",
+        ])
+        .optional(),
+      subject: z.string().optional(),
+      predicate: z.string().optional(),
+      value: z.any().optional(),
+      evidence: z
+        .object({
+          message_index: z.number().int(),
+          excerpt: z.string(),
+        })
+        .optional(),
+      evidence_strength: z.number().optional(),
+      relation: z
+        .enum(["corroborates", "supersedes", "conflicts_with"])
+        .optional(),
+      valid_from: z.string().optional(),
+      valid_to: z.string().optional(),
     }),
   ),
 });
@@ -852,6 +884,15 @@ export function generateAdditiveExtractionPrompt(options: {
   sections.push(`## Observation Date\n${observationDate}`);
 
   sections.push(`## Current Date\n${currentDate}`);
+
+  sections.push(`## Output Contract
+Return only JSON with a \"memory\" array. Each item must include id, text,
+kind, subject, predicate, value, attributed_to, and evidence. Evidence contains
+the original integer message_index and an exact excerpt from that non-system
+message. Optional relation is corroborates, supersedes, or conflicts_with;
+optional linked_memory_ids may contain only IDs from Existing Memories. Events
+and independent preferences do not supersede one another merely because they
+are newer or semantically similar.`);
 
   if (options.customInstructions) {
     sections.push(`## Custom Instructions\n${options.customInstructions}`);

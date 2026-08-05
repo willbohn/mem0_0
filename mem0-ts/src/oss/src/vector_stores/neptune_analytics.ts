@@ -40,6 +40,7 @@ interface WhereClauseResult {
 }
 
 export class NeptuneAnalyticsVectorStore implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private clientConfig: Record<string, any>;
   private clientOverride?: NeptuneGraphClientLike;
   private sdkPromise?: Promise<NeptuneSDK>;

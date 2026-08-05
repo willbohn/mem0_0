@@ -3,6 +3,7 @@ import { MemoryConfig } from "../types";
 export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   disableHistory: false,
   version: "v1.1",
+  recall: { mode: "stateAware" },
   embedder: {
     provider: "openai",
     config: {

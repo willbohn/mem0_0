@@ -85,6 +85,7 @@ $$;
 */
 
 export class SupabaseDB implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private client!: SupabaseClient;
   private readonly supabaseUrl: string;
   private readonly supabaseKey: string;

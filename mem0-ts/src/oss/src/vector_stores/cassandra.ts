@@ -39,6 +39,7 @@ interface CassandraVector {
 }
 
 export class CassandraDB implements VectorStore {
+  readonly supportsCompleteScopedList = true;
   private static readonly PAGE_SIZE = 500;
   private readonly driver?: any;
   private readonly contactPoints?: string[];
