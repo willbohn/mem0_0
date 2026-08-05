@@ -409,10 +409,31 @@ def _discover_lifecycle_candidates(vector_store, filters):
             payload.get("_mem0_schema_version") == SCHEMA_VERSION
             and payload.get("_mem0_state_key")
             and payload.get("_mem0_kind") in STATE_LIKE_KINDS
-            and payload.get("_mem0_status", "active") in {"active", "disputed"}
+            and payload.get("_mem0_status", "active") in {"active", "disputed", "superseded"}
         ):
             candidates.append({"id": str(memory_id), "payload": deepcopy(payload)})
     return sorted(candidates, key=lambda candidate: candidate["id"])
+
+
+def _adopt_linked_state_key(lifecycle_metadata, lifecycle_candidates):
+    """Use an explicit linked transition to preserve the predecessor's canonical state key."""
+    if lifecycle_metadata.get("_mem0_relation") not in {"supersedes", "corroborates", "conflicts_with"}:
+        return
+    related_ids = {str(memory_id) for memory_id in lifecycle_metadata.get("_mem0_related_to", [])}
+    if not related_ids:
+        return
+    kind = lifecycle_metadata.get("_mem0_kind")
+    linked_keys = {
+        candidate["payload"].get("_mem0_state_key")
+        for candidate in lifecycle_candidates
+        if candidate["id"] in related_ids
+        and candidate["payload"].get("_mem0_kind") == kind
+        and candidate["payload"].get("_mem0_state_key")
+    }
+    if len(linked_keys) > 1:
+        raise MemoryPersistenceError("Linked state transition spans multiple canonical state keys")
+    if linked_keys:
+        lifecycle_metadata["_mem0_state_key"] = linked_keys.pop()
 
 
 def _verify_complete_insert(vector_store, memory_ids):
@@ -1239,7 +1260,9 @@ class Memory(MemoryBase):
                 logger.warning("Skipping ungrounded memory extraction: %s", error)
                 continue
             related = lifecycle_metadata.get("_mem0_related_to", [])
-            lifecycle_metadata["_mem0_related_to"] = [uuid_mapping.get(memory_id, memory_id) for memory_id in related]
+            lifecycle_metadata["_mem0_related_to"] = [
+                uuid_mapping[memory_id] for memory_id in related if memory_id in uuid_mapping
+            ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
 
@@ -1261,6 +1284,8 @@ class Memory(MemoryBase):
         lifecycle_candidates = (
             _discover_lifecycle_candidates(self.vector_store, search_filters) if needs_lifecycle_candidates else []
         )
+        for memory in state_like_memories:
+            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
         # Phase 3: Batch embed all extracted memory texts
         mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]
@@ -3381,7 +3406,9 @@ class AsyncMemory(MemoryBase):
                 logger.warning("Skipping ungrounded memory extraction (async): %s", error)
                 continue
             related = lifecycle_metadata.get("_mem0_related_to", [])
-            lifecycle_metadata["_mem0_related_to"] = [uuid_mapping.get(memory_id, memory_id) for memory_id in related]
+            lifecycle_metadata["_mem0_related_to"] = [
+                uuid_mapping[memory_id] for memory_id in related if memory_id in uuid_mapping
+            ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
 
@@ -3404,6 +3431,8 @@ class AsyncMemory(MemoryBase):
             if needs_lifecycle_candidates
             else []
         )
+        for memory in state_like_memories:
+            _adopt_linked_state_key(memory["_mem0_lifecycle"], lifecycle_candidates)
 
         # Phase 3: Batch embed all extracted memory texts
         mem_texts = [m.get("text", "") for m in extracted_memories if m.get("text")]

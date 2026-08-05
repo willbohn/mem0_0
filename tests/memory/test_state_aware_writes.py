@@ -294,6 +294,117 @@ def test_explicit_state_change_supersedes_old_value_with_bidirectional_links():
     assert old_update.kwargs["payload"]["_mem0_superseded_by"] == new_id
 
 
+def test_explicit_linked_state_change_reuses_canonical_predecessor_key():
+    old = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User's office is in Kyoto",
+            "user_id": "u1",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::office_location",
+            "_mem0_value": "Kyoto",
+            "_mem0_status": "active",
+            "_mem0_schema_version": 1,
+        },
+    )
+    changed = extraction("User's office moved to Osaka", "Osaka")
+    changed.update({"subject": "user.residence", "predicate": "location", "linked_memory_ids": ["0"]})
+    memory = make_memory([changed], existing=[old])
+
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "My office is now in Osaka"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    new_payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert new_payload["_mem0_state_key"] == "user::office_location"
+    assert new_payload["_mem0_supersedes"] == ["old-id"]
+    assert memory.vector_store.update.call_args.kwargs["payload"]["_mem0_status"] == "superseded"
+
+
+def test_linked_historical_predecessor_identifies_current_chain_head():
+    historical = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User's office was in Kyoto",
+            "user_id": "u1",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::office_location",
+            "_mem0_value": "Kyoto",
+            "_mem0_status": "superseded",
+            "_mem0_schema_version": 1,
+            "_mem0_superseded_by": "current-id",
+        },
+    )
+    current = SimpleNamespace(
+        id="current-id",
+        score=0.8,
+        payload={
+            "data": "User's office is in Osaka",
+            "user_id": "u1",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::office_location",
+            "_mem0_value": "Osaka",
+            "_mem0_status": "active",
+            "_mem0_schema_version": 1,
+            "_mem0_supersedes": ["old-id"],
+        },
+    )
+    reverted = extraction("User's office returned to Kyoto", "Kyoto")
+    reverted.update({"subject": "user.workplace", "predicate": "city", "linked_memory_ids": ["0"]})
+    memory = make_memory([reverted], existing=[historical, current])
+
+    memory._add_to_vector_store(
+        [{"role": "user", "content": "My office has moved back to Kyoto"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    new_payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert new_payload["_mem0_state_key"] == "user::office_location"
+    assert new_payload["_mem0_supersedes"] == ["current-id"]
+    update = memory.vector_store.update.call_args
+    assert update.kwargs["vector_id"] == "current-id"
+    assert update.kwargs["payload"]["_mem0_status"] == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_async_explicit_linked_state_change_reuses_canonical_predecessor_key():
+    old = SimpleNamespace(
+        id="old-id",
+        score=0.9,
+        payload={
+            "data": "User's office is in Kyoto",
+            "user_id": "u1",
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::office_location",
+            "_mem0_value": "Kyoto",
+            "_mem0_status": "active",
+            "_mem0_schema_version": 1,
+        },
+    )
+    changed = extraction("User's office moved to Osaka", "Osaka")
+    changed.update({"subject": "user.residence", "predicate": "location", "linked_memory_ids": ["0"]})
+    memory = make_memory([changed], existing=[old], memory_class=AsyncMemory)
+
+    await memory._add_to_vector_store(
+        [{"role": "user", "content": "My office is now in Osaka"}],
+        {"user_id": "u1"},
+        {"user_id": "u1"},
+        infer=True,
+    )
+
+    new_payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert new_payload["_mem0_state_key"] == "user::office_location"
+    assert new_payload["_mem0_supersedes"] == ["old-id"]
+    assert memory.vector_store.update.call_args.kwargs["payload"]["_mem0_status"] == "superseded"
+
+
 def test_ambiguous_state_conflict_marks_both_versions_disputed():
     old = SimpleNamespace(
         id="old-id",
