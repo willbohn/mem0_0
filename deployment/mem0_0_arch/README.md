@@ -97,6 +97,16 @@ python -m deployment.mem0_0_arch.backup_restore backup \
 
 This pauses only `mem0-arch-mem0-1`, inventories PostgreSQL and SQLite, backs up both stores, inventories them again while the writer remains paused, and requires the pre/post counts and complete-row digests to match. The tool always attempts to unpause after a successful pause. It writes a `cross_store_consistency=verified` receipt only after unpause succeeds; any backup, reconciliation, or unpause failure removes the new artifacts and emits no receipt. The receipt contains the exact writer name, pause method, success booleans, and content-free pre/post inventories—never stored bodies or command output. Any other writer-container name is rejected before Podman is called.
 
+If the isolated shadow was restored from an earlier snapshot and the verified final snapshot has identical content-free inventories, prove the existing stores match without overwriting them:
+
+```bash
+python -m deployment.mem0_0_arch.backup_restore reconcile-shadow \
+  /home/will/.local/share/mem0_0-arch/backups/<verified-receipt>.receipt.json \
+  --home /home/will
+```
+
+Reconciliation is read-only, accepts only a quiesced `cross_store_consistency=verified` receipt, and fails on any PostgreSQL or SQLite count or full-row digest difference.
+
 Restore only into the isolated shadow container. The command rejects a non-empty memory table or an existing target history DB, verifies ciphertext hashes before decryption, and reconciles both stores afterward:
 
 ```bash

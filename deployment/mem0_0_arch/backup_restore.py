@@ -485,6 +485,38 @@ def restore_shadow(
     }
 
 
+def reconcile_shadow(
+    paths: RuntimePaths,
+    receipt_path: Path,
+    *,
+    shadow_postgres_container: str,
+    runner: Runner | None = None,
+) -> dict[str, Any]:
+    """Prove that existing canonical stores match one quiesced legacy receipt without mutating either store."""
+
+    runner = runner or CommandRunner()
+    if shadow_postgres_container != "mem0_0-arch-shadow-postgres-1":
+        raise MigrationConflictError("reconciliation target must be the canonical isolated shadow container")
+    receipt = verify_backup_receipt(receipt_path)
+    if receipt["cross_store_consistency"] != "verified":
+        raise BackupVerificationError("shadow reconciliation requires a quiesced verified source receipt")
+    target_history = paths.target_state / "runtime" / ".mem0_0" / "history.db"
+    if not target_history.is_file():
+        raise MigrationConflictError("shadow history is unavailable for reconciliation")
+    postgres = postgres_inventory(runner, shadow_postgres_container, 25432)
+    sqlite = sqlite_inventory(target_history)
+    compare_inventories(receipt["source"]["postgres"], postgres, label="PostgreSQL")
+    compare_inventories(receipt["source"]["sqlite"], sqlite, label="SQLite")
+    return {
+        "schema_version": 1,
+        "status": "reconciled",
+        "cross_store_consistency": "verified",
+        "postgres": postgres,
+        "sqlite": sqlite,
+        "legacy_state_retained": True,
+    }
+
+
 def adopt_legacy_backup(
     paths: RuntimePaths,
     legacy_artifact: Path,
@@ -598,6 +630,10 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("receipt", type=Path)
     restore.add_argument("--home", type=Path, default=Path.home())
     restore.add_argument("--shadow-container", default="mem0_0-arch-shadow-postgres-1")
+    reconcile = subparsers.add_parser("reconcile-shadow")
+    reconcile.add_argument("receipt", type=Path)
+    reconcile.add_argument("--home", type=Path, default=Path.home())
+    reconcile.add_argument("--shadow-container", default="mem0_0-arch-shadow-postgres-1")
     adopt = subparsers.add_parser("adopt-legacy-backup")
     adopt.add_argument("artifact", type=Path)
     adopt.add_argument("sidecar", type=Path)
@@ -618,6 +654,14 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 restore_shadow(paths, args.receipt, shadow_postgres_container=args.shadow_container),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    elif args.command == "reconcile-shadow":
+        print(
+            json.dumps(
+                reconcile_shadow(paths, args.receipt, shadow_postgres_container=args.shadow_container),
                 indent=2,
                 sort_keys=True,
             )

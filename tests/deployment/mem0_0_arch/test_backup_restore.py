@@ -13,6 +13,7 @@ from deployment.mem0_0_arch.backup_restore import (
     compare_inventories,
     create_encrypted_backup,
     postgres_inventory,
+    reconcile_shadow,
     restore_shadow,
     verify_backup_receipt,
     verify_legacy_sidecar,
@@ -212,6 +213,43 @@ def test_default_backup_remains_not_proven_and_never_pauses_writer(tmp_path, mon
     assert receipt["cross_store_consistency"] == "not_proven"
     assert "quiescence" not in receipt
     assert not any(event[:2] in {("podman", "pause"), ("podman", "unpause")} for event in runner.events)
+
+
+def test_reconcile_shadow_proves_existing_stores_match_a_quiesced_receipt(tmp_path, monkeypatch):
+    paths = _backup_paths(tmp_path)
+    runner = BackupRunner()
+    _patch_backup_sources(monkeypatch)
+    receipt_path = create_encrypted_backup(
+        paths,
+        legacy_postgres_container="mem0-arch-postgres-1",
+        legacy_writer_container="mem0-arch-mem0-1",
+        source_repository=tmp_path / "source",
+        runner=runner,
+        timestamp="20260806T000003Z",
+    )
+    target_history = paths.target_state / "runtime" / ".mem0_0" / "history.db"
+    target_history.parent.mkdir(parents=True)
+    shutil.copyfile(paths.legacy_state / "history" / "history.db", target_history)
+    monkeypatch.setattr(
+        "deployment.mem0_0_arch.backup_restore.postgres_inventory",
+        lambda *_args, **_kwargs: {"rows": 2, "content_sha256": "a" * 64},
+    )
+
+    report = reconcile_shadow(
+        paths,
+        receipt_path,
+        shadow_postgres_container="mem0_0-arch-shadow-postgres-1",
+        runner=runner,
+    )
+
+    assert report == {
+        "schema_version": 1,
+        "status": "reconciled",
+        "cross_store_consistency": "verified",
+        "postgres": {"rows": 2, "content_sha256": "a" * 64},
+        "sqlite": sqlite_inventory(target_history),
+        "legacy_state_retained": True,
+    }
 
 
 def test_quiesced_backup_unpauses_and_removes_artifacts_on_inventory_drift(tmp_path, monkeypatch):
