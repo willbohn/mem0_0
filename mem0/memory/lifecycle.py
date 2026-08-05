@@ -148,6 +148,11 @@ def lexical_fallback_results(query: str, rows: Iterable[Any], *, top_k: int) -> 
 
 def is_historical_query(query: str) -> bool:
     normalized = unicodedata.normalize("NFKC", query or "").casefold()
+    # "Based on the conversation history ..." is common benchmark and agent
+    # boilerplate for a current-state question.  Remove only that source-context
+    # phrase; genuine requests such as "relocation history" remain historical,
+    # and stronger markers (dates, "used to", "before") still match below.
+    normalized = re.sub(r"\b(?:conversation|chat)\s+history\b", "", normalized)
     return any(re.search(pattern, normalized, flags=re.UNICODE) for pattern in _HISTORICAL_PATTERNS)
 
 

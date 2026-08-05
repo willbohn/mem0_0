@@ -128,7 +128,9 @@ def test_lexical_fallback_ranks_unicode_keyword_candidate_without_native_bm25():
 def test_historical_query_detection_is_multilingual_and_date_aware():
     assert is_historical_query("Where did I use to live?")
     assert is_historical_query("2024年以前はどこに住んでいましたか")
+    assert is_historical_query("What is my relocation history?")
     assert not is_historical_query("Where do I live now?")
+    assert not is_historical_query("Based on the conversation history, do I still live in Seattle?")
     assert historical_query_window("Where did I live on 2024-06-01?")[0].isoformat() == "2024-06-01"
 
 
