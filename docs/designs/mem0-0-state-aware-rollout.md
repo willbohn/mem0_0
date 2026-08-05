@@ -11,7 +11,7 @@ Ship the state-aware Python lifecycle, benchmark it against the current OSS beha
 - Never infer lifecycle metadata for the nine deployed legacy rows; treat them as active historical-neutral records.
 - Never hard-delete or overwrite existing deployment data, configuration, secrets, backups, or harness registrations during migration.
 - Do not change CI/CD workflows, add a mandatory core dependency, or add a second default write-time LLM call.
-- Use `prism-ml/bonsai-27b` and BGE-M3 for fully local benchmark work.
+- Use the public `prism-ml/Bonsai-27B-gguf` artifact and BGE-M3 for fully local benchmark work.
 - Do not cut over production until all benchmark, parity, shadow-restore, review, and verification gates pass.
 
 ## Task 1: Stabilize the Python lifecycle checkpoint

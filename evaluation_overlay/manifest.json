@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "repository": {
+    "baseline_revision": "50bdaaea0c02744720ed374d88584fd01494eeb7",
+    "candidate_revision": "0ea19eb2c4f119248a2a47cec2dbf5b065511aa4"
+  },
+  "sources": {
+    "memory_benchmarks": {
+      "kind": "git",
+      "location": "evaluation",
+      "location_root": "repository",
+      "repository": "https://github.com/mem0ai/memory-benchmarks.git",
+      "revision": "4b61c5d31b9c668a12b4f5e78064248a02c82d2b"
+    },
+    "memora": {
+      "kind": "git",
+      "location": "sources/memora",
+      "location_root": "work",
+      "repository": "https://github.com/geniesinc/Memora.git",
+      "revision": "a6493188efc836d6511ed5e4163fe3ba87da30ff"
+    },
+    "stale": {
+      "kind": "git",
+      "location": "sources/stale",
+      "location_root": "work",
+      "repository": "https://github.com/icedreamc/STALE.git",
+      "revision": "ea7d391103a151927cd29d2f01d87597a782bdcb"
+    }
+  },
+  "datasets": {
+    "beam": {
+      "kind": "huggingface",
+      "repository": "Mohammadta/BEAM",
+      "revision": "3205395e897e7318c7b094ef4e6047b9b82dbb03",
+      "additional_repository": "Mohammadta/BEAM-10M",
+      "additional_revision": "9b2096193fe74e2837e4713e483351e19817773c"
+    },
+    "locomo": {
+      "kind": "git_file",
+      "repository": "https://github.com/snap-research/locomo.git",
+      "revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
+    },
+    "longmemeval": {
+      "kind": "huggingface",
+      "repository": "xiaowu0162/longmemeval-cleaned",
+      "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f"
+    },
+    "memora": {
+      "kind": "git",
+      "repository": "https://github.com/geniesinc/Memora.git",
+      "revision": "a6493188efc836d6511ed5e4163fe3ba87da30ff",
+      "source": "memora"
+    },
+    "stale": {
+      "kind": "huggingface",
+      "repository": "STALEproj/STALE",
+      "revision": "617c51dc200b5ab09970834144c7e51c77959af0"
+    }
+  },
+  "models": {
+    "embedder": {
+      "id": "BAAI/bge-m3",
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181"
+    },
+    "llm": {
+      "id": "prism-ml/Bonsai-27B-gguf",
+      "revision": "f10afb355f104535e3e3e98cf7ab7795c72bd292"
+    }
+  },
+  "arms": {
+    "baseline": {
+      "config": "config/baseline.json.template",
+      "mem0_host": "http://127.0.0.1:18888",
+      "recall_mode": "legacy",
+      "store_id": "mem0_0-baseline"
+    },
+    "candidate": {
+      "config": "config/candidate.json.template",
+      "mem0_host": "http://127.0.0.1:28888",
+      "recall_mode": "state_aware",
+      "store_id": "mem0_0-candidate-state-aware"
+    },
+    "candidate_legacy": {
+      "config": "config/candidate-legacy.json.template",
+      "mem0_host": "http://127.0.0.1:38888",
+      "recall_mode": "legacy",
+      "store_id": "mem0_0-candidate-legacy"
+    }
+  },
+  "benchmarks": {
+    "beam": {
+      "source": "memory_benchmarks",
+      "dataset": "beam",
+      "command": [
+        "{python}", "-m", "benchmarks.beam.run", "--project-name", "{project_name}", "--backend", "oss",
+        "--mem0-host", "{mem0_host}", "--answerer-model", "prism-ml/Bonsai-27B-gguf", "--judge-model",
+        "prism-ml/Bonsai-27B-gguf", "--chat-sizes", "100K,500K,1M,10M", "--conversations", "0-99",
+        "--top-k", "{top_k}", "--top-k-cutoffs", "{top_k_cutoffs}", "--max-workers", "{max_workers}", "--output-dir",
+        "{output_dir}", "--dataset-cache-dir", "{dataset_dir}", "--run-id", "{run_id}", "{resume_flag}"
+      ]
+    },
+    "locomo": {
+      "source": "memory_benchmarks",
+      "dataset": "locomo",
+      "command": [
+        "{python}", "-m", "benchmarks.locomo.run", "--project-name", "{project_name}", "--backend", "oss",
+        "--mem0-host", "{mem0_host}", "--answerer-model", "prism-ml/Bonsai-27B-gguf", "--judge-model",
+        "prism-ml/Bonsai-27B-gguf", "--conversations", "0,1,2,3,4,5,6,7,8,9", "--top-k", "{top_k}",
+        "--top-k-cutoffs", "{top_k_cutoffs}", "--max-workers", "{max_workers}", "--output-dir", "{output_dir}",
+        "--dataset-path", "{dataset_dir}/locomo10.json", "--run-id", "{run_id}", "{resume_flag}"
+      ]
+    },
+    "longmemeval": {
+      "source": "memory_benchmarks",
+      "dataset": "longmemeval",
+      "command": [
+        "{python}", "-m", "benchmarks.longmemeval.run", "--project-name", "{project_name}", "--backend", "oss",
+        "--mem0-host", "{mem0_host}", "--answerer-model", "prism-ml/Bonsai-27B-gguf", "--judge-model",
+        "prism-ml/Bonsai-27B-gguf", "--all-questions", "--seed", "{seed}", "--top-k", "{top_k}", "--top-k-cutoffs",
+        "{top_k_cutoffs}", "--max-workers", "{max_workers}", "--output-dir", "{output_dir}", "--dataset-path",
+        "{dataset_dir}/longmemeval_s_cleaned.json", "--run-id", "{run_id}", "{resume_flag}"
+      ]
+    },
+    "memora": {
+      "source": "memora",
+      "dataset": "memora",
+      "command": [
+        "{python}", "-m", "evaluation_overlay.state_benchmark", "--format", "memora", "--dataset-path",
+        "{source_dir}/data", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
+      ]
+    },
+    "stale": {
+      "source": "stale",
+      "dataset": "stale",
+      "command": [
+        "{python}", "-m", "evaluation_overlay.state_benchmark", "--format", "stale", "--dataset-path",
+        "{dataset_dir}/STALE.json", "--output-dir", "{output_dir}", "--top-k", "{top_k}", "{resume_flag}"
+      ]
+    }
+  },
+  "budgets": {
+    "max_workers": 1,
+    "seed": 42,
+    "top_k": 200,
+    "top_k_cutoffs": [10, 20, 50, 200]
+  },
+  "gates": {
+    "answer_accuracy": {"delta_min": -0.01},
+    "latency.search_ms.p95": {"relative_max": 1.15},
+    "provider_calls.write_llm.mean_per_sample": {"relative_max": 1.0},
+    "retrieved_context.mean_chars": {"relative_max": 1.0},
+    "state_resolution_accuracy": {"delta_min": 0.1},
+    "stale_memory_leakage": {"relative_max": 0.5}
+  }
+}

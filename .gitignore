@@ -167,6 +167,9 @@ cython_debug/
 .ideas.md
 .todos.md
 
+# Pinned evaluation overlay runtime (raw data, model/source clones, logs, and checkpoints)
+.evaluation-overlay/
+
 # Database
 db
 test-db
