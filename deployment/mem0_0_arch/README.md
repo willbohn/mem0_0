@@ -151,7 +151,7 @@ python -m deployment.mem0_0_arch.live_verify \
   --api-key-file /home/will/.config/mem0_0-arch/bridge-api-key
 ```
 
-The verifier prints only aggregate counts, booleans, and timings. It creates a unique five-field synthetic scope, never calls `delete_all`, and attempts exact-ID cleanup of only records rediscovered inside that scope even when an earlier check fails.
+The verifier prints only aggregate counts, booleans, and timings. It creates a unique five-field synthetic scope, never calls `delete_all`, and attempts exact-ID cleanup of only records rediscovered inside that scope even when an earlier check fails. For the canonical local shadow, it also removes SQLite history rows for those exact synthetic IDs and message rows for that exact synthetic session scope from the private default history database; cleanup fails if either store retains test artifacts. Pass `--history-db` only when verifying a non-default isolated shadow path.
 
 ## 5. Bridge compatibility
 

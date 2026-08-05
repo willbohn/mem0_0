@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import re
+import sqlite3
+import stat
 import time
 import uuid
 from collections.abc import Callable
@@ -19,6 +21,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_API_URL = "http://127.0.0.1:28889"
 DEFAULT_KEY_FILE = Path("/home/will/.config/mem0_0-arch/bridge-api-key")
+DEFAULT_HISTORY_DB = Path("/home/will/.local/share/mem0_0-arch/runtime/.mem0_0/history.db")
 MAX_BODY_BYTES = 512 * 1024
 MAX_SCOPE_RESULTS = 100
 MAX_CLEANUP_BATCH = 1_000
@@ -57,6 +60,7 @@ def _empty_report() -> dict[str, Any]:
             "consolidation_dry_run": False,
             "helpful_feedback": False,
             "cleanup_complete": False,
+            "history_cleanup_complete": False,
         },
         "counts": {
             "created": 0,
@@ -68,6 +72,8 @@ def _empty_report() -> dict[str, Any]:
             "cleanup_discovered": 0,
             "cleanup_deleted": 0,
             "cleanup_remaining": 0,
+            "cleanup_history_deleted": 0,
+            "cleanup_messages_deleted": 0,
         },
         "timings_ms": {},
     }
@@ -81,6 +87,7 @@ class LiveVerifier:
         *,
         api_url: str = DEFAULT_API_URL,
         api_key_file: str | Path = DEFAULT_KEY_FILE,
+        history_db_path: str | Path | None = None,
         timeout: float = 600.0,
         opener: Callable[[Request, float], bytes] = _default_open,
     ) -> None:
@@ -104,6 +111,7 @@ class LiveVerifier:
             raise ConfigurationError("API URL must be a credential-free loopback HTTP endpoint with an explicit port")
         self.api_url = api_url.rstrip("/")
         self.api_key_file = Path(api_key_file)
+        self.history_db_path = Path(history_db_path) if history_db_path is not None else None
         self.timeout = max(0.1, min(float(timeout), 900.0))
         self.opener = opener
         self.api_key = self._load_private_key()
@@ -118,6 +126,7 @@ class LiveVerifier:
         self.report = _empty_report()
         self.report["checks"]["auth_file_private"] = True
         self.report["checks"]["scope_complete"] = set(self.scope) == set(REQUIRED_SCOPE) and all(self.scope.values())
+        self.report["checks"]["history_cleanup_complete"] = self.history_db_path is None
 
     def _load_private_key(self) -> str:
         try:
@@ -237,6 +246,60 @@ class LiveVerifier:
             memory_ids.add(memory_id)
         return memory_ids
 
+    def _purge_history_rows(self, memory_ids: set[str]) -> tuple[int, int]:
+        """Remove SQLite artifacts created by this disposable verification scope."""
+        if self.history_db_path is None:
+            return 0, 0
+        try:
+            file_stat = self.history_db_path.lstat()
+        except OSError as exc:
+            raise VerificationError("history DB is unavailable for synthetic cleanup") from exc
+        if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode) or file_stat.st_mode & 0o077:
+            raise VerificationError("history DB must be a private regular file")
+        if any(not MEMORY_ID_RE.fullmatch(memory_id) for memory_id in memory_ids):
+            raise VerificationError("history cleanup received an invalid memory identifier")
+
+        connection = sqlite3.connect(self.history_db_path, timeout=30)
+        try:
+            history_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(history)")}
+            message_columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(messages)")}
+            if "memory_id" not in history_columns or "session_scope" not in message_columns:
+                raise VerificationError("history DB has an unexpected schema")
+            connection.execute("BEGIN IMMEDIATE")
+            history_deleted = 0
+            ordered_ids = sorted(memory_ids)
+            for start in range(0, len(ordered_ids), 500):
+                chunk = ordered_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = connection.execute(f"DELETE FROM history WHERE memory_id IN ({placeholders})", chunk)
+                history_deleted += max(0, int(cursor.rowcount))
+            remaining = 0
+            for start in range(0, len(ordered_ids), 500):
+                chunk = ordered_ids[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                remaining += int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM history WHERE memory_id IN ({placeholders})", chunk
+                    ).fetchone()[0]
+                )
+            if remaining:
+                raise VerificationError("synthetic history cleanup did not drain exact memory IDs")
+            session_scope = f"agent_id={self.scope['agent_id']}&user_id={self.scope['user_id']}"
+            cursor = connection.execute("DELETE FROM messages WHERE session_scope = ?", (session_scope,))
+            messages_deleted = max(0, int(cursor.rowcount))
+            if connection.execute("SELECT COUNT(*) FROM messages WHERE session_scope = ?", (session_scope,)).fetchone()[0]:
+                raise VerificationError("synthetic message cleanup did not drain the exact session scope")
+            connection.commit()
+            return history_deleted, messages_deleted
+        except VerificationError:
+            connection.rollback()
+            raise
+        except sqlite3.Error as exc:
+            connection.rollback()
+            raise VerificationError("synthetic history cleanup failed") from exc
+        finally:
+            connection.close()
+
     def _cleanup(self) -> None:
         started = time.monotonic()
         discovered: set[str] = set()
@@ -268,11 +331,20 @@ class LiveVerifier:
                     break
         except Exception:
             remaining = discovered
+        if terminal_discovery_succeeded and not cleanup_failed and len(deleted) == len(discovered) and not remaining:
+            try:
+                history_deleted, messages_deleted = self._purge_history_rows(deleted)
+                self.report["counts"]["cleanup_history_deleted"] = history_deleted
+                self.report["counts"]["cleanup_messages_deleted"] = messages_deleted
+                self.report["checks"]["history_cleanup_complete"] = True
+            except VerificationError:
+                cleanup_failed = True
         self.report["counts"]["cleanup_discovered"] = len(discovered)
         self.report["counts"]["cleanup_deleted"] = len(deleted)
         self.report["counts"]["cleanup_remaining"] = len(remaining)
         self.report["checks"]["cleanup_complete"] = (
             terminal_discovery_succeeded and not cleanup_failed and len(deleted) == len(discovered) and not remaining
+            and self.report["checks"]["history_cleanup_complete"]
         )
         self.report["timings_ms"]["cleanup"] = round((time.monotonic() - started) * 1000, 3)
 
@@ -392,12 +464,14 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=Path(os.environ.get("MEM0_API_KEY_FILE", DEFAULT_KEY_FILE)),
     )
+    parser.add_argument("--history-db", type=Path, default=DEFAULT_HISTORY_DB)
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args(argv)
     try:
         report = LiveVerifier(
             api_url=args.api_url,
             api_key_file=args.api_key_file,
+            history_db_path=args.history_db,
             timeout=args.timeout,
         ).run()
     except Exception:

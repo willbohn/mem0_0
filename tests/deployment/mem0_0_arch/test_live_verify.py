@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -154,6 +155,7 @@ def test_live_verifier_exercises_scoped_lifecycle_and_emits_only_aggregate_evide
         "consolidation_dry_run": True,
         "helpful_feedback": True,
         "cleanup_complete": True,
+        "history_cleanup_complete": True,
     }
     assert report["counts"] == {
         "created": 2,
@@ -165,6 +167,8 @@ def test_live_verifier_exercises_scoped_lifecycle_and_emits_only_aggregate_evide
         "cleanup_discovered": 2,
         "cleanup_deleted": 2,
         "cleanup_remaining": 0,
+        "cleanup_history_deleted": 0,
+        "cleanup_messages_deleted": 0,
     }
     _assert_output_scalars_are_safe(report)
     rendered = json.dumps(report)
@@ -182,6 +186,41 @@ def test_live_verifier_exercises_scoped_lifecycle_and_emits_only_aggregate_evide
         if method == "POST" and path in {"/search", "/memories/audit", "/memories/consolidate"}:
             assert body["filters"] == scope
     assert all(path != "/memories" for method, path, *_rest in api.requests if method == "DELETE")
+
+
+def test_live_verifier_removes_only_exact_synthetic_history_rows(key_file: Path, monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    history_db = tmp_path / "history.db"
+    verifier = LiveVerifier(api_key_file=key_file, history_db_path=history_db, opener=FakeLiveAPI(), timeout=1)
+    session_scope = f"agent_id={verifier.scope['agent_id']}&user_id={verifier.scope['user_id']}"
+    with sqlite3.connect(history_db) as connection:
+        connection.execute("CREATE TABLE history (id TEXT, memory_id TEXT, event TEXT)")
+        connection.execute("CREATE TABLE messages (id TEXT, session_scope TEXT, content TEXT)")
+        connection.executemany(
+            "INSERT INTO history VALUES (?, ?, ?)",
+            [
+                ("h1", "legacy-memory", "ADD"),
+                ("h2", "synthetic-kyoto", "ADD"),
+                ("h3", "synthetic-osaka", "ADD"),
+            ],
+        )
+        connection.executemany(
+            "INSERT INTO messages VALUES (?, ?, ?)",
+            [("m1", "agent_id=legacy&user_id=legacy", "legacy"), ("m2", session_scope, "synthetic")],
+        )
+    history_db.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    report = verifier.run()
+
+    assert report["ok"] is True
+    assert report["checks"]["history_cleanup_complete"] is True
+    assert report["counts"]["cleanup_history_deleted"] == 2
+    assert report["counts"]["cleanup_messages_deleted"] == 1
+    with sqlite3.connect(history_db) as connection:
+        assert connection.execute("SELECT memory_id FROM history").fetchall() == [("legacy-memory",)]
+        assert connection.execute("SELECT session_scope FROM messages").fetchall() == [
+            ("agent_id=legacy&user_id=legacy",)
+        ]
 
 
 def test_failure_still_cleans_only_ids_verified_in_the_unique_scope(key_file: Path, monkeypatch) -> None:
