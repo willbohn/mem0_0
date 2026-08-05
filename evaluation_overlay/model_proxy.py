@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,7 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -26,11 +27,17 @@ class ModelProxyConfig:
     api_key: str
     artifact_path: Path
     artifact_sha256: str
+    device: str
+    enable_thinking: bool
+    gpu_layers: str
     launcher_sha256: str
     listen_host: str
     listen_port: int
     model_id: str
+    offloaded_layers: int | None
     receipt_sha256: str
+    resolved_device: str | None
+    total_layers: int | None
     upstream: str
 
 
@@ -52,6 +59,10 @@ def validate_proxy_config(config: ModelProxyConfig) -> None:
         raise ValueError("model proxy port must be between 1 and 65535")
     if not config.model_id:
         raise ValueError("model ID is required")
+    if not config.device or config.gpu_layers != "all":
+        raise ValueError("an explicit device with all GPU layers is required")
+    if config.enable_thinking is not False:
+        raise ValueError("benchmark inference must explicitly disable thinking")
     for value, label in (
         (config.artifact_sha256, "model artifact SHA-256"),
         (config.launcher_sha256, "launcher SHA-256"),
@@ -83,13 +94,21 @@ def build_models_payload(config: ModelProxyConfig) -> dict[str, Any]:
     }
 
 
-def build_proxy_attestation(config: ModelProxyConfig) -> dict[str, str]:
+def build_proxy_attestation(config: ModelProxyConfig) -> dict[str, Any]:
+    validate_runtime_placement(config)
     return {
         "artifact_sha256": config.artifact_sha256,
+        "backend_verified": True,
+        "device": config.device,
+        "enable_thinking": config.enable_thinking,
+        "gpu_layers": config.gpu_layers,
         "kind": "mem0_0_model_proxy_v1",
         "launcher_sha256": config.launcher_sha256,
         "model_id": config.model_id,
+        "offloaded_layers": config.offloaded_layers,
         "receipt_sha256": config.receipt_sha256,
+        "resolved_device": config.resolved_device,
+        "total_layers": config.total_layers,
     }
 
 
@@ -112,6 +131,12 @@ def build_llama_command(
         str(parsed.port),
         "--api-key-file",
         str(api_key_file),
+        "--device",
+        config.device,
+        "--gpu-layers",
+        config.gpu_layers,
+        "--verbosity",
+        "4",
         "--parallel",
         "1",
         "--ctx-size",
@@ -120,6 +145,36 @@ def build_llama_command(
     if model_role == "embedder":
         command.extend(("--embedding", "--pooling", "mean"))
     return command
+
+
+def parse_runtime_placement(config: ModelProxyConfig, log_text: str) -> dict[str, Any]:
+    devices = re.findall(r"using device ([^\s(]+)\s*\(", log_text)
+    offloads = re.findall(r"offloaded (\d+)/(\d+) layers to GPU", log_text)
+    if not devices or devices[-1] != config.device:
+        raise RuntimeError(f"llama-server did not confirm requested device {config.device}")
+    if not offloads:
+        raise RuntimeError("llama-server did not report resolved layer offload placement")
+    offloaded_layers, total_layers = (int(value) for value in offloads[-1])
+    if offloaded_layers <= 0 or offloaded_layers != total_layers:
+        raise RuntimeError(
+            f"llama-server only offloaded {offloaded_layers}/{total_layers} model layers to {config.device}"
+        )
+    return {
+        "offloaded_layers": offloaded_layers,
+        "resolved_device": devices[-1],
+        "total_layers": total_layers,
+    }
+
+
+def validate_runtime_placement(config: ModelProxyConfig) -> None:
+    if (
+        config.resolved_device != config.device
+        or not isinstance(config.offloaded_layers, int)
+        or not isinstance(config.total_layers, int)
+        or config.offloaded_layers <= 0
+        or config.offloaded_layers != config.total_layers
+    ):
+        raise ValueError("model proxy requires verified complete layer placement on the requested device")
 
 
 def _upstream_url(config: ModelProxyConfig, request_path: str) -> str:
@@ -133,9 +188,28 @@ def _upstream_url(config: ModelProxyConfig, request_path: str) -> str:
     return f"{base}/{path.lstrip('/')}" + (f"?{parsed.query}" if parsed.query else "")
 
 
+def prepare_upstream_body(config: ModelProxyConfig, path: str, body: bytes | None) -> bytes | None:
+    if body is None or urllib.parse.urlsplit(path).path != "/v1/chat/completions":
+        return body
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("chat completion request body must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("chat completion request body must be a JSON object")
+    template_kwargs = payload.get("chat_template_kwargs")
+    if template_kwargs is None:
+        template_kwargs = {}
+    elif not isinstance(template_kwargs, dict):
+        raise ValueError("chat_template_kwargs must be a JSON object")
+    payload["chat_template_kwargs"] = {**template_kwargs, "enable_thinking": config.enable_thinking}
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
 def _request_upstream(
     config: ModelProxyConfig, method: str, path: str, body: bytes | None = None
 ) -> tuple[int, str, bytes]:
+    body = prepare_upstream_body(config, path, body)
     request = urllib.request.Request(
         _upstream_url(config, path),
         data=body,
@@ -164,6 +238,7 @@ def _verify_upstream_model(config: ModelProxyConfig) -> None:
 
 def create_server(config: ModelProxyConfig) -> ThreadingHTTPServer:
     validate_proxy_config(config)
+    validate_runtime_placement(config)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "mem0_0-model-proxy/1"
@@ -210,7 +285,11 @@ def create_server(config: ModelProxyConfig) -> ThreadingHTTPServer:
                 return
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length)
-            status, content_type, response = _request_upstream(config, "POST", self.path, body)
+            try:
+                status, content_type, response = _request_upstream(config, "POST", self.path, body)
+            except ValueError as exc:
+                self._send(400, "application/json", json.dumps({"error": str(exc)}).encode())
+                return
             self._send(status, content_type, response)
 
     return ThreadingHTTPServer((config.listen_host, config.listen_port), Handler)
@@ -277,11 +356,17 @@ def main(argv: list[str] | None = None) -> int:
         api_key=api_key,
         artifact_path=artifact_path,
         artifact_sha256=artifact["sha256"],
+        device=manifest["runtimes"]["llama_server"]["device"],
+        enable_thinking=manifest["runtimes"]["llama_server"]["enable_thinking"],
+        gpu_layers=manifest["runtimes"]["llama_server"]["gpu_layers"],
         launcher_sha256=manifest["runtimes"]["llama_server"]["sha256"],
         listen_host=args.listen_host,
         listen_port=args.port,
         model_id=manifest["models"][args.model]["id"],
+        offloaded_layers=None,
         receipt_sha256=receipts[args.model]["receipt_sha256"],
+        resolved_device=None,
+        total_layers=None,
         upstream=f"http://127.0.0.1:{args.upstream_port}/v1",
     )
     validate_proxy_config(config)
@@ -294,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         key_file.write(api_key + "\n")
         key_file_path = Path(key_file.name)
     key_file_path.chmod(0o600)
-    log = log_path.open("ab")
+    log = log_path.open("wb")
     process = subprocess.Popen(
         build_llama_command(config, launcher, key_file_path, args.model),
         stdout=log,
@@ -302,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         _wait_for_upstream(config, process)
+        placement = parse_runtime_placement(config, log_path.read_text(encoding="utf-8", errors="replace"))
+        config = replace(config, **placement)
         key_file_path.unlink(missing_ok=True)
         server = create_server(config)
         server.serve_forever()

@@ -11,6 +11,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,38 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ManifestError(f"datasets.{name} requires a supported kind and repository")
         if dataset.get("source") is not None and dataset["source"] not in sources:
             raise ManifestError(f"datasets.{name}.source is not declared")
+        if dataset.get("source") is None:
+            required_files = dataset.get("required_files")
+            if not isinstance(required_files, list) or not required_files:
+                raise ManifestError(f"datasets.{name}.required_files must be a non-empty array")
+            if len(set(required_files)) != len(required_files):
+                raise ManifestError(f"datasets.{name}.required_files must not contain duplicates")
+            for index, relative_path in enumerate(required_files):
+                _require_safe_relative_path(relative_path, f"datasets.{name}.required_files[{index}]")
+        derivation = dataset.get("derivation")
+        if derivation is not None:
+            derivation = _require_mapping(derivation, f"datasets.{name}.derivation")
+            if derivation.get("tool") != "duckdb" or derivation.get("binary") != "duckdb":
+                raise ManifestError(f"datasets.{name}.derivation must use the pinned duckdb binary")
+            _require_sha256(derivation.get("binary_sha256"), f"datasets.{name}.derivation.binary_sha256")
+            _require_safe_relative_path(derivation.get("extension_path"), f"datasets.{name}.derivation.extension_path")
+            _require_sha256(
+                derivation.get("json_extension_sha256"),
+                f"datasets.{name}.derivation.json_extension_sha256",
+            )
+            if not isinstance(derivation.get("version"), str) or not derivation["version"]:
+                raise ManifestError(f"datasets.{name}.derivation.version is required")
+            outputs = _require_mapping(derivation.get("outputs"), f"datasets.{name}.derivation.outputs")
+            consumed_paths = set(outputs)
+            for output, inputs in outputs.items():
+                _require_safe_relative_path(output, f"datasets.{name}.derivation output")
+                if not isinstance(inputs, list) or not inputs:
+                    raise ManifestError(f"datasets.{name}.derivation output {output} needs input files")
+                for input_path in inputs:
+                    _require_safe_relative_path(input_path, f"datasets.{name}.derivation input")
+                    consumed_paths.add(input_path)
+            if consumed_paths != set(dataset["required_files"]):
+                raise ManifestError(f"datasets.{name}.derivation inputs and outputs must equal required_files")
 
     models = _require_mapping(manifest.get("models"), "models")
     for name in ("llm", "embedder"):
@@ -166,12 +199,34 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise ManifestError(f"models.{name}.artifact.format must be gguf or safetensors")
 
     runtimes = _require_mapping(manifest.get("runtimes"), "runtimes")
+    benchmark_server = _require_mapping(runtimes.get("benchmark_server"), "runtimes.benchmark_server")
+    for package in ("fastapi", "uvicorn"):
+        if not isinstance(benchmark_server.get(package), str) or not benchmark_server[package]:
+            raise ManifestError(f"runtimes.benchmark_server.{package} is required")
+    runtime_packages = _require_mapping(
+        benchmark_server.get("packages"), "runtimes.benchmark_server.packages"
+    )
+    if not runtime_packages or any(
+        not isinstance(package, str) or not package or not isinstance(version, str) or not version
+        for package, version in runtime_packages.items()
+    ):
+        raise ManifestError("runtimes.benchmark_server.packages must pin every package version")
+    for package in ("fastapi", "uvicorn"):
+        if runtime_packages.get(package) != benchmark_server[package]:
+            raise ManifestError(f"runtimes.benchmark_server.{package} must match packages")
+    _require_sha256(benchmark_server.get("requirements_sha256"), "runtimes.benchmark_server.requirements_sha256")
     llama_server = _require_mapping(runtimes.get("llama_server"), "runtimes.llama_server")
     if llama_server.get("binary") != "llama-server":
         raise ManifestError("runtimes.llama_server.binary must be llama-server")
     _require_sha256(llama_server.get("sha256"), "runtimes.llama_server.sha256")
     if not isinstance(llama_server.get("version"), str) or not llama_server["version"]:
         raise ManifestError("runtimes.llama_server.version is required")
+    if not isinstance(llama_server.get("device"), str) or not llama_server["device"]:
+        raise ManifestError("runtimes.llama_server.device is required")
+    if llama_server.get("enable_thinking") is not False:
+        raise ManifestError("runtimes.llama_server.enable_thinking must be false")
+    if llama_server.get("gpu_layers") != "all":
+        raise ManifestError("runtimes.llama_server.gpu_layers must be all")
     qdrant = _require_mapping(runtimes.get("qdrant"), "runtimes.qdrant")
     image = qdrant.get("image")
     if not isinstance(image, str) or "@sha256:" not in image:
@@ -320,6 +375,34 @@ def _verify_file_hashes(root: Path, files: Any, artifact: str) -> dict[str, str]
     return verified
 
 
+_DATASET_RECEIPT_KEYS = (
+    "kind",
+    "repository",
+    "revision",
+    "required_files",
+    "additional_repository",
+    "additional_revision",
+    "derivation",
+)
+
+
+def _expected_derivation_proof(derivation: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "binary_sha256": derivation["binary_sha256"],
+        "extension_sha256": derivation["json_extension_sha256"],
+        "kind": "mem0_0_executed_derivation_v1",
+        "outputs": derivation["outputs"],
+        "version": derivation["version"],
+    }
+
+
+def _dataset_receipt(dataset: dict[str, Any], files: dict[str, str], **extra: Any) -> dict[str, Any]:
+    receipt = {key: dataset[key] for key in _DATASET_RECEIPT_KEYS if key in dataset}
+    receipt["files"] = files
+    receipt.update(extra)
+    return receipt
+
+
 def verify_dataset_receipts(manifest: dict[str, Any], work_dir: Path) -> dict[str, dict[str, Any]]:
     verified: dict[str, dict[str, Any]] = {}
     for name, dataset in manifest["datasets"].items():
@@ -335,10 +418,17 @@ def verify_dataset_receipts(manifest: dict[str, Any], work_dir: Path) -> dict[st
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ManifestError(f"dataset {name} has no valid source receipt at {receipt_path}") from exc
-        expected = {key: dataset[key] for key in ("kind", "repository", "revision")}
+        expected = {key: dataset[key] for key in _DATASET_RECEIPT_KEYS if key in dataset}
         actual = {key: receipt.get(key) for key in expected}
         if actual != expected:
             raise ManifestError(f"dataset {name} receipt does not match the pinned manifest")
+        if set(receipt.get("files") or {}) != set(dataset["required_files"]):
+            raise ManifestError(f"dataset {name} receipt files must exactly match required_files")
+        if dataset.get("derivation"):
+            if receipt.get("derivation_proof") != _expected_derivation_proof(dataset["derivation"]):
+                raise ManifestError(f"dataset {name} has no valid executed derivation proof")
+        elif receipt.get("derivation_proof") is not None:
+            raise ManifestError(f"dataset {name} has an unexpected derivation proof")
         files = _verify_file_hashes(receipt_path.parent, receipt.get("files"), f"dataset {name}")
         verified[name] = {
             "files": files,
@@ -346,6 +436,106 @@ def verify_dataset_receipts(manifest: dict[str, Any], work_dir: Path) -> dict[st
             "revision": dataset["revision"],
         }
     return verified
+
+
+def prepare_dataset_receipt(
+    manifest: dict[str, Any], work_dir: Path, name: str, relative_paths: list[str]
+) -> dict[str, Any]:
+    validate_manifest(manifest)
+    if name not in manifest["datasets"]:
+        raise ManifestError(f"unknown dataset {name!r}")
+    dataset = manifest["datasets"][name]
+    if dataset.get("source"):
+        raise ManifestError(f"dataset {name} is verified from its pinned Git source and needs no receipt")
+    if dataset.get("derivation"):
+        raise ManifestError(f"dataset {name} must be prepared with its pinned derivation command")
+    required_files = set(dataset["required_files"])
+    if set(relative_paths) != required_files or len(relative_paths) != len(required_files):
+        raise ManifestError(f"dataset {name} files must exactly match required_files")
+    dataset_dir = (work_dir / "datasets" / name).resolve()
+    files: dict[str, str] = {}
+    for relative_path in sorted(set(relative_paths)):
+        _require_safe_relative_path(relative_path, f"dataset {name} file")
+        candidate = (dataset_dir / relative_path).resolve()
+        if candidate == dataset_dir or dataset_dir not in candidate.parents:
+            raise ManifestError(f"dataset {name} contains an unsafe file path")
+        try:
+            files[relative_path] = _sha256_file(candidate)
+        except OSError as exc:
+            raise ManifestError(f"dataset {name} is missing consumed file {relative_path}") from exc
+    receipt = _dataset_receipt(dataset, files)
+    _atomic_write_json(dataset_dir / ".source-receipt.json", receipt)
+    return receipt
+
+
+def derive_dataset_receipt(manifest: dict[str, Any], work_dir: Path, name: str) -> dict[str, Any]:
+    """Execute a manifest-pinned DuckDB Parquet-to-JSON derivation and receipt every consumed file."""
+    validate_manifest(manifest)
+    if name not in manifest["datasets"]:
+        raise ManifestError(f"unknown dataset {name!r}")
+    dataset = manifest["datasets"][name]
+    derivation = dataset.get("derivation")
+    if not derivation:
+        raise ManifestError(f"dataset {name} has no declared derivation")
+
+    binary_name = derivation["binary"]
+    resolved_binary = shutil.which(binary_name)
+    if not resolved_binary:
+        raise ManifestError(f"pinned derivation binary {binary_name} is not installed")
+    binary = Path(resolved_binary).resolve()
+    try:
+        binary_sha256 = _sha256_file(binary)
+    except OSError as exc:
+        raise ManifestError("cannot read the pinned derivation binary") from exc
+    if binary_sha256 != derivation["binary_sha256"]:
+        raise ManifestError("installed derivation binary does not match the pinned SHA-256")
+    version = subprocess.run([str(binary), "-version"], check=True, capture_output=True, text=True).stdout.strip()
+    if version != derivation["version"]:
+        raise ManifestError("installed derivation binary version does not match the manifest")
+
+    extension = (work_dir / derivation["extension_path"]).resolve()
+    try:
+        extension_sha256 = _sha256_file(extension)
+    except OSError as exc:
+        raise ManifestError("cannot read the pinned DuckDB JSON extension") from exc
+    if work_dir.resolve() not in extension.parents or extension_sha256 != derivation["json_extension_sha256"]:
+        raise ManifestError("DuckDB JSON extension does not match the pinned SHA-256")
+
+    dataset_dir = (work_dir / "datasets" / name).resolve()
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    def sql_path(path: Path) -> str:
+        return str(path).replace("'", "''")
+
+    for output_path, input_paths in sorted(derivation["outputs"].items()):
+        output = (dataset_dir / output_path).resolve()
+        inputs = [(dataset_dir / input_path).resolve() for input_path in input_paths]
+        for input_path in inputs:
+            if dataset_dir not in input_path.parents or not input_path.is_file():
+                raise ManifestError(f"dataset {name} is missing derivation input {input_path.name}")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+        parquet_argument = (
+            f"'{sql_path(inputs[0])}'"
+            if len(inputs) == 1
+            else "[" + ",".join(f"'{sql_path(input_path)}'" for input_path in inputs) + "]"
+        )
+        statement = (
+            f"LOAD '{sql_path(extension)}'; "
+            f"COPY (SELECT * FROM read_parquet({parquet_argument})) "
+            f"TO '{sql_path(temporary)}' (FORMAT JSON, ARRAY true);"
+        )
+        try:
+            subprocess.run([str(binary), "-unsigned", "-c", statement], check=True, capture_output=True, text=True)
+            os.replace(temporary, output)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            temporary.unlink(missing_ok=True)
+            raise ManifestError(f"dataset {name} derivation failed for {output_path}") from exc
+
+    files = {relative_path: _sha256_file(dataset_dir / relative_path) for relative_path in dataset["required_files"]}
+    receipt = _dataset_receipt(dataset, files, derivation_proof=_expected_derivation_proof(derivation))
+    _atomic_write_json(dataset_dir / ".source-receipt.json", receipt)
+    return receipt
 
 
 def verify_model_receipts(manifest: dict[str, Any], work_dir: Path) -> dict[str, dict[str, Any]]:
@@ -442,12 +632,16 @@ def expected_runtime_attestation(manifest: dict[str, Any], arm_name: str) -> dic
     revision_key = "baseline_revision" if arm_name == "baseline" else "candidate_revision"
     return {
         "arm": arm_name,
+        "fastapi_version": manifest["runtimes"]["benchmark_server"]["fastapi"],
         "embedder_model": manifest["models"]["embedder"]["id"],
         "llm_model": manifest["models"]["llm"]["id"],
         "qdrant_platform_digest": manifest["runtimes"]["qdrant"]["platform_digest"],
         "recall_mode": arm["recall_mode"],
         "repository_revision": manifest["repository"][revision_key],
+        "runtime_packages": manifest["runtimes"]["benchmark_server"]["packages"],
+        "runtime_requirements_sha256": manifest["runtimes"]["benchmark_server"]["requirements_sha256"],
         "store_id": arm["store_id"],
+        "uvicorn_version": manifest["runtimes"]["benchmark_server"]["uvicorn"],
     }
 
 
@@ -546,11 +740,24 @@ def verify_model_endpoints(
             raise ManifestError(f"cannot verify the mem0_0 proxy attestation for {name}") from exc
         expected_attestation = {
             "artifact_sha256": manifest["models"][name]["artifact"]["sha256"],
+            "backend_verified": True,
             "kind": "mem0_0_model_proxy_v1",
+            "device": manifest["runtimes"]["llama_server"]["device"],
+            "enable_thinking": manifest["runtimes"]["llama_server"]["enable_thinking"],
+            "gpu_layers": manifest["runtimes"]["llama_server"]["gpu_layers"],
             "launcher_sha256": manifest["runtimes"]["llama_server"]["sha256"],
             "model_id": model_id,
+            "offloaded_layers": attestation.get("offloaded_layers"),
             "receipt_sha256": expected_fingerprint,
+            "resolved_device": manifest["runtimes"]["llama_server"]["device"],
+            "total_layers": attestation.get("total_layers"),
         }
+        if (
+            not isinstance(attestation.get("offloaded_layers"), int)
+            or attestation["offloaded_layers"] <= 0
+            or attestation.get("total_layers") != attestation["offloaded_layers"]
+        ):
+            raise ManifestError(f"{name} endpoint did not verify complete model-layer offload")
         if attestation != expected_attestation:
             raise ManifestError(f"{name} endpoint is not the receipt-bound mem0_0 model proxy")
         verified[name] = {

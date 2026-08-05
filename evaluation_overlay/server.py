@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -75,6 +77,19 @@ def _repository_revision(repository_root: Path) -> str:
     if dirty:
         raise RuntimeError(f"benchmark repository worktree is not clean: {repository_root}")
     return revision
+
+
+def _prepare_runtime_directories(config: dict[str, Any]) -> None:
+    Path(config["history_db_path"]).parent.mkdir(parents=True, exist_ok=True)
+
+
+def _runtime_requirements_sha256(manifest_path: Path) -> str:
+    requirements = manifest_path.parent / "runtime-requirements.txt"
+    return hashlib.sha256(requirements.read_bytes()).hexdigest()
+
+
+def _installed_runtime_packages(packages: dict[str, str]) -> dict[str, str]:
+    return {package: importlib.metadata.version(package) for package in packages}
 
 
 def _search_arguments(request: dict[str, Any]) -> tuple[dict[str, Any], int]:
@@ -153,6 +168,7 @@ def create_app(
     from mem0 import Memory
 
     config = _load_arm_config(manifest_path, manifest, arm, work_dir, qdrant_runtime)
+    _prepare_runtime_directories(config)
     memory = Memory.from_config(config)
     loaded_module = Path(sys.modules["mem0"].__file__).resolve()
     if repository_root.resolve() not in loaded_module.parents:
@@ -165,11 +181,15 @@ def create_app(
     actual_attestation = {
         "arm": arm,
         "embedder_model": str(memory.embedding_model.config.model),
+        "fastapi_version": importlib.metadata.version("fastapi"),
         "llm_model": str(memory.llm.config.model),
         "qdrant_platform_digest": qdrant_runtime["platform_digest"],
         "recall_mode": getattr(configured_recall, "mode", "legacy"),
         "repository_revision": actual_revision,
+        "runtime_packages": _installed_runtime_packages(manifest["runtimes"]["benchmark_server"]["packages"]),
+        "runtime_requirements_sha256": _runtime_requirements_sha256(manifest_path),
         "store_id": config["vector_store"]["config"]["collection_name"],
+        "uvicorn_version": importlib.metadata.version("uvicorn"),
     }
     if actual_attestation != expected:
         raise RuntimeError(

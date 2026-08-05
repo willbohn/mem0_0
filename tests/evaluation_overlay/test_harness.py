@@ -2,6 +2,7 @@ import errno
 import hashlib
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -9,9 +10,11 @@ from evaluation_overlay.harness import (
     CheckpointMismatchError,
     ManifestError,
     build_run_spec,
+    derive_dataset_receipt,
     expected_runtime_attestation,
     load_manifest,
     materialize_model_artifact,
+    prepare_dataset_receipt,
     run_benchmark,
     verify_dataset_receipts,
     verify_model_receipts,
@@ -37,6 +40,7 @@ def _manifest(tmp_path):
             name: {
                 "kind": "huggingface",
                 "repository": f"example/{name}",
+                "required_files": ["locomo10.json"] if name == "locomo" else ["data.json"],
                 "revision": "d" * 40,
             }
             for name in ("locomo", "longmemeval", "beam", "stale", "memora")
@@ -68,8 +72,17 @@ def _manifest(tmp_path):
             },
         },
         "runtimes": {
+            "benchmark_server": {
+                "fastapi": "0.141.1",
+                "packages": {"fastapi": "0.141.1", "uvicorn": "0.52.0"},
+                "requirements_sha256": "8" * 64,
+                "uvicorn": "0.52.0",
+            },
             "llama_server": {
                 "binary": "llama-server",
+                "device": "Vulkan0",
+                "enable_thinking": False,
+                "gpu_layers": "all",
                 "sha256": "7" * 64,
                 "version": "10216",
             },
@@ -229,9 +242,10 @@ def test_dataset_receipts_verify_consumed_file_hashes(tmp_path):
         dataset_dir = tmp_path / "work" / "datasets" / name
         dataset_dir.mkdir(parents=True)
         payload = f"{name}\n".encode()
-        (dataset_dir / "data.json").write_bytes(payload)
-        receipt = {key: dataset[key] for key in ("kind", "repository", "revision")}
-        receipt["files"] = {"data.json": hashlib.sha256(payload).hexdigest()}
+        relative_path = dataset["required_files"][0]
+        (dataset_dir / relative_path).write_bytes(payload)
+        receipt = {key: dataset[key] for key in ("kind", "repository", "required_files", "revision")}
+        receipt["files"] = {relative_path: hashlib.sha256(payload).hexdigest()}
         (dataset_dir / ".source-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
 
     verified = verify_dataset_receipts(manifest, tmp_path / "work")
@@ -244,13 +258,94 @@ def test_dataset_receipts_fail_closed_on_content_drift(tmp_path):
     dataset = manifest["datasets"]["locomo"]
     dataset_dir = tmp_path / "work" / "datasets" / "locomo"
     dataset_dir.mkdir(parents=True)
-    (dataset_dir / "data.json").write_text("changed", encoding="utf-8")
-    receipt = {key: dataset[key] for key in ("kind", "repository", "revision")}
-    receipt["files"] = {"data.json": "0" * 64}
+    (dataset_dir / "locomo10.json").write_text("changed", encoding="utf-8")
+    receipt = {key: dataset[key] for key in ("kind", "repository", "required_files", "revision")}
+    receipt["files"] = {"locomo10.json": "0" * 64}
     (dataset_dir / ".source-receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
 
     with pytest.raises(ManifestError, match="SHA-256 verification"):
         verify_dataset_receipts(manifest, tmp_path / "work")
+
+
+def test_prepare_dataset_receipt_hashes_exact_manifest_required_files(tmp_path):
+    manifest = load_manifest(_manifest(tmp_path))
+    dataset_dir = tmp_path / "work" / "datasets" / "locomo"
+    dataset_dir.mkdir(parents=True)
+    (dataset_dir / "locomo10.json").write_bytes(b"pinned\n")
+
+    receipt = prepare_dataset_receipt(
+        manifest,
+        tmp_path / "work",
+        "locomo",
+        ["locomo10.json"],
+    )
+    for other in ("longmemeval", "beam", "stale", "memora"):
+        other_dir = tmp_path / "work" / "datasets" / other
+        other_dir.mkdir(parents=True)
+        (other_dir / "data.json").write_bytes(b"other\n")
+        prepare_dataset_receipt(manifest, tmp_path / "work", other, ["data.json"])
+
+    assert receipt["files"] == {"locomo10.json": hashlib.sha256(b"pinned\n").hexdigest()}
+    assert verify_dataset_receipts(manifest, tmp_path / "work")["locomo"]["files"] == receipt["files"]
+
+
+def test_prepare_dataset_receipt_rejects_a_subset_of_required_files(tmp_path):
+    manifest = load_manifest(_manifest(tmp_path))
+    manifest["datasets"]["beam"]["required_files"] = ["source.parquet", "beam.json"]
+    dataset_dir = tmp_path / "work" / "datasets" / "beam"
+    dataset_dir.mkdir(parents=True)
+    (dataset_dir / "source.parquet").write_bytes(b"source")
+
+    with pytest.raises(ManifestError, match="exactly match required_files"):
+        prepare_dataset_receipt(manifest, tmp_path / "work", "beam", ["source.parquet"])
+
+
+def test_derive_dataset_receipt_executes_pinned_tool_and_receipts_inputs_and_outputs(tmp_path, monkeypatch):
+    manifest = load_manifest(_manifest(tmp_path))
+    binary = tmp_path / "duckdb"
+    binary.write_bytes(b"binary")
+    extension = tmp_path / "work" / "duckdb_extensions" / "json.duckdb_extension"
+    extension.parent.mkdir(parents=True)
+    extension.write_bytes(b"extension")
+    dataset_dir = tmp_path / "work" / "datasets" / "beam"
+    dataset_dir.mkdir(parents=True)
+    (dataset_dir / "source.parquet").write_bytes(b"source")
+    manifest["datasets"]["beam"].update(
+        {
+            "required_files": ["beam.json", "source.parquet"],
+            "derivation": {
+                "binary": "duckdb",
+                "binary_sha256": hashlib.sha256(b"binary").hexdigest(),
+                "extension_path": "duckdb_extensions/json.duckdb_extension",
+                "json_extension_sha256": hashlib.sha256(b"extension").hexdigest(),
+                "outputs": {"beam.json": ["source.parquet"]},
+                "tool": "duckdb",
+                "version": "duckdb-test",
+            },
+        }
+    )
+    monkeypatch.setattr("evaluation_overlay.harness.shutil.which", lambda _name: str(binary))
+
+    def fake_run(command, **_kwargs):
+        if command[-1] == "-version":
+            return subprocess.CompletedProcess(command, 0, stdout="duckdb-test\n", stderr="")
+        output_path = command[-1].split(" TO '", 1)[1].split("' (FORMAT", 1)[0]
+        Path(output_path).write_bytes(b"[]\n")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("evaluation_overlay.harness.subprocess.run", fake_run)
+
+    receipt = derive_dataset_receipt(manifest, tmp_path / "work", "beam")
+    for other in ("locomo", "longmemeval", "stale", "memora"):
+        relative_path = manifest["datasets"][other]["required_files"][0]
+        other_dir = tmp_path / "work" / "datasets" / other
+        other_dir.mkdir(parents=True)
+        (other_dir / relative_path).write_bytes(b"other\n")
+        prepare_dataset_receipt(manifest, tmp_path / "work", other, [relative_path])
+
+    assert receipt["derivation_proof"]["kind"] == "mem0_0_executed_derivation_v1"
+    assert set(receipt["files"]) == {"beam.json", "source.parquet"}
+    assert verify_dataset_receipts(manifest, tmp_path / "work")["beam"]["files"] == receipt["files"]
 
 
 def test_model_receipts_verify_artifact_hashes(tmp_path):
@@ -346,6 +441,10 @@ def test_runtime_attestation_binds_each_arm_to_revision_mode_models_and_store(tm
     assert baseline["recall_mode"] == legacy["recall_mode"] == "legacy"
     assert len({baseline["store_id"], candidate["store_id"], legacy["store_id"]}) == 3
     assert baseline["qdrant_platform_digest"] == manifest["runtimes"]["qdrant"]["platform_digest"]
+    assert baseline["fastapi_version"] == "0.141.1"
+    assert baseline["runtime_requirements_sha256"] == "8" * 64
+    assert baseline["runtime_packages"] == {"fastapi": "0.141.1", "uvicorn": "0.52.0"}
+    assert baseline["uvicorn_version"] == "0.52.0"
 
 
 def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypatch):
@@ -374,10 +473,17 @@ def test_model_endpoint_verification_requires_both_pinned_ids(tmp_path, monkeypa
                 return json.dumps(
                     {
                         "artifact_sha256": self.receipt_sha256["artifact_sha256"],
+                        "backend_verified": True,
+                        "device": "Vulkan0",
+                        "enable_thinking": False,
+                        "gpu_layers": "all",
                         "kind": "mem0_0_model_proxy_v1",
                         "launcher_sha256": "7" * 64,
                         "model_id": self.receipt_sha256["model_id"],
+                        "offloaded_layers": 25,
                         "receipt_sha256": self.receipt_sha256["receipt_sha256"],
+                        "resolved_device": "Vulkan0",
+                        "total_layers": 25,
                     }
                 ).encode()
             return json.dumps(

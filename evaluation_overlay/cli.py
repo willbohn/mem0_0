@@ -9,7 +9,9 @@ from evaluation_overlay.harness import (
     REQUIRED_ARMS,
     REQUIRED_BENCHMARKS,
     build_run_spec,
+    derive_dataset_receipt,
     load_manifest,
+    prepare_dataset_receipt,
     materialize_model_artifact,
     run_benchmark,
     verify_dataset_receipts,
@@ -152,6 +154,28 @@ def _prepare_model(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prepare_dataset(args: argparse.Namespace) -> int:
+    manifest, _, work_dir = _manifest_and_paths(args)
+    if manifest["datasets"][args.dataset].get("derivation"):
+        if args.file:
+            raise ValueError("derived datasets use the exact manifest-declared files; omit --file")
+        receipt = derive_dataset_receipt(manifest, work_dir, args.dataset)
+    else:
+        receipt = prepare_dataset_receipt(manifest, work_dir, args.dataset, args.file or [])
+    print(
+        json.dumps(
+            {
+                "dataset": args.dataset,
+                "files": len(receipt["files"]),
+                "receipt": str(work_dir / "datasets" / args.dataset / ".source-receipt.json"),
+                "status": "verified",
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def _summarize(args: argparse.Namespace) -> int:
     summary = summarize_observations(load_observations(args.observations), cutoffs=args.cutoff)
     _write_json(args.output, summary)
@@ -249,6 +273,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow a verified byte-for-byte copy when source and work tree are on different filesystems",
     )
     prepare_model.set_defaults(func=_prepare_model)
+
+    prepare_dataset = subparsers.add_parser(
+        "prepare-dataset", help="Hash consumed files and write a manifest-bound dataset receipt"
+    )
+    add_common(prepare_dataset)
+    prepare_dataset.add_argument("--dataset", required=True, choices=sorted(REQUIRED_BENCHMARKS - {"memora"}))
+    prepare_dataset.add_argument(
+        "--file",
+        action="append",
+        help="Consumed relative path; repeat until it exactly matches required_files (omit for derived datasets)",
+    )
+    prepare_dataset.set_defaults(func=_prepare_dataset)
 
     summarize = subparsers.add_parser("summarize", help="Create a content-free summary from normalized JSONL")
     summarize.add_argument("observations", type=Path)

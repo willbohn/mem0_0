@@ -33,16 +33,46 @@
       "repository": "Mohammadta/BEAM",
       "revision": "3205395e897e7318c7b094ef4e6047b9b82dbb03",
       "additional_repository": "Mohammadta/BEAM-10M",
-      "additional_revision": "9b2096193fe74e2837e4713e483351e19817773c"
+      "additional_revision": "9b2096193fe74e2837e4713e483351e19817773c",
+      "required_files": [
+        "beam_100K.json",
+        "beam_10M.json",
+        "beam_1M.json",
+        "beam_500K.json",
+        "source/beam-10m/data/10M-00000-of-00002.parquet",
+        "source/beam-10m/data/10M-00001-of-00002.parquet",
+        "source/beam/data/100K-00000-of-00001.parquet",
+        "source/beam/data/1M-00000-of-00001.parquet",
+        "source/beam/data/500K-00000-of-00001.parquet"
+      ],
+      "derivation": {
+        "binary": "duckdb",
+        "binary_sha256": "02f1b93ff8b0dc40f3600b04d55b5f2ca4e968ef22e8c1a3cc49dcf34f880a06",
+        "extension_path": "duckdb_extensions/v1.5.5/linux_amd64/json.duckdb_extension",
+        "json_extension_sha256": "20921f71a8dd71c5518ab99649ea285b47182c693dd752bb89013c664e89bc32",
+        "outputs": {
+          "beam_100K.json": ["source/beam/data/100K-00000-of-00001.parquet"],
+          "beam_10M.json": [
+            "source/beam-10m/data/10M-00000-of-00002.parquet",
+            "source/beam-10m/data/10M-00001-of-00002.parquet"
+          ],
+          "beam_1M.json": ["source/beam/data/1M-00000-of-00001.parquet"],
+          "beam_500K.json": ["source/beam/data/500K-00000-of-00001.parquet"]
+        },
+        "tool": "duckdb",
+        "version": "v1.5.5 (Variegata) d8cdaa33fd"
+      }
     },
     "locomo": {
       "kind": "git_file",
       "repository": "https://github.com/snap-research/locomo.git",
+      "required_files": ["locomo10.json"],
       "revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376"
     },
     "longmemeval": {
       "kind": "huggingface",
       "repository": "xiaowu0162/longmemeval-cleaned",
+      "required_files": ["longmemeval_s_cleaned.json"],
       "revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f"
     },
     "memora": {
@@ -54,6 +84,7 @@
     "stale": {
       "kind": "huggingface",
       "repository": "STALEproj/STALE",
+      "required_files": ["T1_T2_400_FULL.json"],
       "revision": "617c51dc200b5ab09970834144c7e51c77959af0"
     }
   },
@@ -84,8 +115,31 @@
     }
   },
   "runtimes": {
+    "benchmark_server": {
+      "fastapi": "0.141.1",
+      "packages": {
+        "annotated-doc": "0.0.5",
+        "annotated-types": "0.8.0",
+        "anyio": "4.14.2",
+        "click": "8.4.2",
+        "fastapi": "0.141.1",
+        "h11": "0.16.0",
+        "idna": "3.18",
+        "pydantic": "2.13.4",
+        "pydantic-core": "2.46.4",
+        "starlette": "1.4.1",
+        "typing-extensions": "4.16.0",
+        "typing-inspection": "0.4.2",
+        "uvicorn": "0.52.0"
+      },
+      "requirements_sha256": "97fa53dc344e9f95ca1179e4c2e22aa4b68b30a293e24f305a775fa40c5551d8",
+      "uvicorn": "0.52.0"
+    },
     "llama_server": {
       "binary": "llama-server",
+      "device": "Vulkan0",
+      "enable_thinking": false,
+      "gpu_layers": "all",
       "sha256": "1e936560cde21d5262f19673b5c8f81bae4d52d4b2d9bddb6298c3ae913b83f8",
       "version": "10216"
     },
