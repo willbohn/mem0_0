@@ -19,7 +19,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def lemmatize_for_bm25(text: str) -> str:
+def lemmatize_for_bm25(text: str, *, unicode_fallback: bool = True) -> str:
     """Lemmatize text for BM25 matching.
 
     Returns space-joined lemmas for full-text search. Falls back to
@@ -29,7 +29,11 @@ def lemmatize_for_bm25(text: str) -> str:
 
     nlp = get_nlp_lemma()
     if nlp is None:
-        return text
+        if not unicode_fallback:
+            return text
+        from mem0.memory.lifecycle import unicode_lexical_terms
+
+        return " ".join(unicode_lexical_terms(text))
 
     doc = nlp(text.lower())
     tokens = []

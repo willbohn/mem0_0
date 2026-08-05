@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from qdrant_client import QdrantClient, models
@@ -23,6 +24,8 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from mem0.exceptions import MemoryPersistenceError
+from mem0.memory.main import _discover_lifecycle_candidates
 from mem0.vector_stores.qdrant import Qdrant
 
 
@@ -477,6 +480,60 @@ class TestQdrant(unittest.TestCase):
 
         # The list method returns the result directly
         self.assertEqual(len(results), 1)
+
+    def test_lifecycle_discovery_accepts_terminal_scroll_cursor(self):
+        point = SimpleNamespace(
+            id="state-id",
+            payload={
+                "data": "User lives in Osaka",
+                "user_id": "u1",
+                "_mem0_schema_version": 1,
+                "_mem0_kind": "state",
+                "_mem0_state_key": "user::residence",
+                "_mem0_status": "active",
+            },
+        )
+        self.client_mock.scroll.return_value = ([point], None)
+
+        candidates = _discover_lifecycle_candidates(self.qdrant, {"user_id": "u1"})
+
+        self.assertEqual(candidates, [{"id": "state-id", "payload": point.payload}])
+
+    def test_lifecycle_discovery_rejects_non_terminal_scroll_cursor(self):
+        self.client_mock.scroll.return_value = ([], "next-offset")
+
+        with self.assertRaisesRegex(MemoryPersistenceError, "incomplete"):
+            _discover_lifecycle_candidates(self.qdrant, {"user_id": "u1"})
+
+    def test_lifecycle_discovery_rejects_scroll_safety_limit_saturation(self):
+        points = [
+            SimpleNamespace(id=f"state-{index}", payload={"user_id": "u1"}) for index in range(10_000)
+        ]
+        self.client_mock.scroll.return_value = (points, None)
+
+        with self.assertRaisesRegex(MemoryPersistenceError, "safety limit"):
+            _discover_lifecycle_candidates(self.qdrant, {"user_id": "u1"})
+
+    def test_lifecycle_discovery_wraps_qdrant_scroll_errors(self):
+        self.client_mock.scroll.side_effect = RuntimeError("scroll unavailable")
+
+        with self.assertRaisesRegex(MemoryPersistenceError, "candidate discovery failed") as raised:
+            _discover_lifecycle_candidates(self.qdrant, {"user_id": "u1"})
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+
+    def test_lifecycle_discovery_rejects_malformed_scroll_shapes(self):
+        malformed_results = (
+            ([],),
+            ([], None, "unexpected"),
+            ("not-a-record-list", None),
+        )
+
+        for malformed in malformed_results:
+            with self.subTest(result=malformed):
+                self.client_mock.scroll.return_value = malformed
+                with self.assertRaisesRegex(MemoryPersistenceError, "candidate discovery failed"):
+                    _discover_lifecycle_candidates(self.qdrant, {"user_id": "u1"})
 
     def test_delete_col(self):
         self.qdrant.delete_col()

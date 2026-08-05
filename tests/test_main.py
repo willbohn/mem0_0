@@ -127,8 +127,8 @@ def test_search(memory_instance):
     assert result["results"][0]["id"] == "1"
     assert result["results"][0]["memory"] == "Memory 1"
     assert result["results"][0]["user_id"] == "test_user"
-    # Score is now combined score (semantic only since no BM25/entity), still 0.9
-    assert result["results"][0]["score"] == pytest.approx(0.9)
+    # State-aware RRF normalizes the first result in the only active channel to 1.0.
+    assert result["results"][0]["score"] == pytest.approx(1.0)
 
     # Hybrid pipeline over-fetches: max(20*4, 60) = 80 (top_k default is now 20)
     memory_instance.vector_store.search.assert_called_once_with(

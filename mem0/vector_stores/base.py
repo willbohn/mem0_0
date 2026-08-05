@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 
 
 class VectorStoreBase(ABC):
+    # State-aware writes may only enumerate lifecycle predecessors through an
+    # explicitly proven complete-list implementation. Providers inherit the
+    # fail-closed default and opt in only when they can uphold that contract.
+    _mem0_supports_complete_list = False
+
     @abstractmethod
     def create_col(self, name, vector_size, distance):
         """Create a new collection."""

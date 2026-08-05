@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 class Qdrant(VectorStoreBase):
+    _mem0_supports_complete_list = True
+
     def __init__(
         self,
         collection_name: str,
@@ -589,6 +591,13 @@ class Qdrant(VectorStoreBase):
             with_payload=True,
             with_vectors=False,
         )
+        return result
+
+    def _mem0_list_complete(self, filters: dict = None, top_k: int = 100) -> list:
+        """Expose Qdrant's records-and-cursor result for fail-closed lifecycle discovery."""
+        result = self.list(filters=filters, top_k=top_k)
+        if not isinstance(result, tuple) or len(result) != 2 or not isinstance(result[0], list):
+            raise ValueError("Qdrant scroll returned a malformed records-and-cursor result")
         return result
 
     def reset(self):

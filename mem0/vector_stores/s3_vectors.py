@@ -22,6 +22,8 @@ class OutputData(BaseModel):
 
 
 class S3Vectors(VectorStoreBase):
+    _mem0_supports_complete_list = True
+
     def __init__(
         self,
         vector_bucket_name: str,
@@ -205,6 +207,29 @@ class S3Vectors(VectorStoreBase):
             ]
         if top_k:
             results = results[:top_k]
+        return [results]
+
+    def _mem0_list_complete(self, filters=None, top_k=None):
+        """Enumerate through SDK pagination until exhaustion or the caller's safety limit."""
+        params = {
+            "vectorBucketName": self.vector_bucket_name,
+            "indexName": self.collection_name,
+            "returnData": False,
+            "returnMetadata": True,
+        }
+        paginator = self.client.get_paginator("list_vectors")
+        results = []
+        for page in paginator.paginate(**params):
+            page_results = self._parse_output(page.get("vectors", []))
+            if filters:
+                page_results = [
+                    result
+                    for result in page_results
+                    if result.payload and all(result.payload.get(key) == value for key, value in filters.items())
+                ]
+            results.extend(page_results)
+            if top_k is not None and len(results) >= top_k:
+                return [results[:top_k]]
         return [results]
 
     def reset(self):

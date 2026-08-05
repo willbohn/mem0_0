@@ -151,7 +151,7 @@ const memories = memory.search("food preferences", {
 
 ### Explain OSS search scores
 
-OSS search combines semantic similarity with optional keyword and entity signals. Pass `explain=True` when tuning retrieval quality or debugging why a memory ranked where it did:
+Python OSS state-aware search unions semantic, keyword, and entity-linked candidates, then combines their ranks with weighted reciprocal-rank fusion. Superseded memories are excluded from current-state questions but remain available to explicit historical questions such as “where did I use to live?” Pass `explain=True` when tuning retrieval quality or debugging why a memory ranked where it did:
 
 <CodeGroup>
 ```python Python
@@ -159,6 +159,7 @@ results = m.search(
     "food preferences",
     filters={"user_id": "alice"},
     explain=True,
+    max_chars=4000,
 )
 
 print(results["results"][0]["score_details"])
@@ -174,7 +175,27 @@ console.log(results.results[0].score_details);
 ```
 </CodeGroup>
 
-Each result includes `score_details` with the semantic score, normalized BM25 score, entity boost, raw combined score, maximum possible score, final score, and threshold used for filtering. The field is omitted unless `explain` is enabled, so existing response shapes stay unchanged.
+Each result includes `score_details` with channel fusion ranks and source scores, the internal state disposition, deduplication information, the bounded evidence-strength tie-break factor, final score, and threshold. The public `threshold` is applied to the normalized final fusion score. The field is omitted unless `explain` is enabled, so default response shapes stay unchanged. `max_chars` applies a deterministic text-character budget after ranking, state filtering, and deduplication.
+
+Stores with native keyword search use it directly. Other stores use a deterministic Unicode-aware fallback—word tokens for whitespace-delimited languages and character n-grams for scripts such as Japanese, Chinese, and Korean—only when the provider can prove a complete scoped listing. If it cannot, search skips that fallback rather than presenting a truncated page as complete; semantic and entity channels continue normally.
+
+### Audit and maintain Python OSS memory
+
+Lifecycle metadata is stored in reserved `_mem0_*` payload fields and is never returned as ordinary SDK metadata. Existing records without lifecycle fields remain active and can be inspected without migration:
+
+```python
+report = m.audit({"user_id": "alice"})
+
+# Preview exact deduplication, supersession repair, and archival actions.
+preview = m.consolidate({"user_id": "alice"})
+
+# Apply only the deterministic safe actions. This never hard-deletes memories.
+applied = m.consolidate({"user_id": "alice"}, dry_run=False, strategy="safe")
+
+m.feedback(memory_id, signal="stale", replacement_id=current_memory_id)
+```
+
+`audit()` reports IDs and issue counts without returning memory bodies. `consolidate()` defaults to a dry run and only archives or suppresses records; `delete()` remains the explicit physical-deletion API. Feedback signals are `helpful`, `irrelevant`, `stale`, and `incorrect`. Helpful feedback affects salience only, while explicit stale or incorrect feedback changes current-recall eligibility.
 
 ## Filter patterns
 

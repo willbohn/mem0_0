@@ -2,8 +2,11 @@ import importlib
 import sys
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from mem0.exceptions import MemoryPersistenceError
+from mem0.memory.main import _discover_lifecycle_candidates
 from mem0.vector_stores.pgvector import (
     PGVector,
     _build_filter_conditions,
@@ -35,6 +38,35 @@ class TestPGVector(unittest.TestCase):
         self.test_vectors = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
         self.test_payloads = [{"key": "value1"}, {"key": "value2"}]
         self.test_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
+
+    def test_lifecycle_discovery_accepts_complete_filtered_sql_listing(self):
+        store = PGVector.__new__(PGVector)
+        row = SimpleNamespace(
+            id="state-id",
+            payload={
+                "data": "User lives in Tokyo",
+                "user_id": "u1",
+                "_mem0_schema_version": 1,
+                "_mem0_kind": "state",
+                "_mem0_state_key": "user::residence",
+                "_mem0_status": "active",
+            },
+        )
+        store.list = MagicMock(return_value=[[row]])
+
+        candidates = _discover_lifecycle_candidates(store, {"user_id": "u1"})
+
+        self.assertEqual(candidates, [{"id": "state-id", "payload": row.payload}])
+        store.list.assert_called_once_with(filters={"user_id": "u1"}, top_k=10_000)
+
+    def test_lifecycle_discovery_wraps_pgvector_listing_error(self):
+        store = PGVector.__new__(PGVector)
+        store.list = MagicMock(side_effect=RuntimeError("database unavailable"))
+
+        with self.assertRaisesRegex(MemoryPersistenceError, "candidate discovery failed") as raised:
+            _discover_lifecycle_candidates(store, {"user_id": "u1"})
+
+        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
 
     @patch('mem0.vector_stores.pgvector.PSYCOPG_VERSION', 3)
     @patch('mem0.vector_stores.pgvector.ConnectionPool')

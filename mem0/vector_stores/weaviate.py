@@ -1,3 +1,4 @@
+import json
 import logging
 import uuid
 from typing import Dict, List, Optional
@@ -21,6 +22,62 @@ from mem0.vector_stores.base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
+_DIRECT_PROPERTIES = frozenset(
+    {
+        "hash",
+        "data",
+        "created_at",
+        "category",
+        "updated_at",
+        "user_id",
+        "agent_id",
+        "run_id",
+    }
+)
+_PAYLOAD_CODEC_MARKER = "_mem0_weaviate_payload_codec"
+_PAYLOAD_CODEC_VERSION = 1
+
+
+def _encode_payload(payload: Dict) -> Dict:
+    """Map a logical payload onto the collection's fixed physical schema."""
+    direct = {key: value for key, value in payload.items() if key in _DIRECT_PROPERTIES}
+    packed = {key: value for key, value in payload.items() if key not in _DIRECT_PROPERTIES and key != "ids"}
+    if packed:
+        direct["metadata"] = json.dumps(
+            {_PAYLOAD_CODEC_MARKER: _PAYLOAD_CODEC_VERSION, "payload": packed},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    return direct
+
+
+def _decode_payload(properties: Dict) -> Dict:
+    """Restore logical payloads while retaining compatibility with legacy rows."""
+    direct = dict(properties)
+    stored_metadata = direct.pop("metadata", None)
+    core = {key: direct.pop(key) for key in list(direct) if key in _DIRECT_PROPERTIES}
+
+    packed = None
+    if isinstance(stored_metadata, str):
+        try:
+            envelope = json.loads(stored_metadata)
+        except (TypeError, ValueError):
+            envelope = None
+        if (
+            isinstance(envelope, dict)
+            and envelope.get(_PAYLOAD_CODEC_MARKER) == _PAYLOAD_CODEC_VERSION
+            and isinstance(envelope.get("payload"), dict)
+        ):
+            packed = envelope["payload"]
+
+    payload = direct
+    if packed is not None:
+        payload.update(packed)
+    elif stored_metadata is not None:
+        payload["metadata"] = stored_metadata
+    payload.update(core)
+    return payload
+
 
 class OutputData(BaseModel):
     id: str
@@ -29,6 +86,8 @@ class OutputData(BaseModel):
 
 
 class Weaviate(VectorStoreBase):
+    _mem0_supports_complete_list = False
+
     def __init__(
         self,
         collection_name: str,
@@ -170,11 +229,8 @@ class Weaviate(VectorStoreBase):
                 object_id = ids[idx] if ids and idx < len(ids) else str(uuid.uuid4())
                 object_id = get_valid_uuid(object_id)
 
-                data_object = payloads[idx] if payloads and idx < len(payloads) else {}
-
-                # Ensure 'id' is not included in properties (it's used as the Weaviate object ID)
-                if "ids" in data_object:
-                    del data_object["ids"]
+                payload = payloads[idx] if payloads and idx < len(payloads) else {}
+                data_object = _encode_payload(payload)
 
                 batch.add_object(collection=self.collection_name, properties=data_object, uuid=object_id, vector=vector)
 
@@ -196,12 +252,11 @@ class Weaviate(VectorStoreBase):
             vector=vectors,
             limit=top_k,
             filters=combined_filter,
-            return_properties=["hash", "created_at", "updated_at", "user_id", "agent_id", "run_id", "data", "category"],
             return_metadata=MetadataQuery(score=True),
         )
         results = []
         for obj in response.objects:
-            payload = obj.properties.copy()
+            payload = _decode_payload(obj.properties)
 
             for id_field in ["run_id", "agent_id", "user_id"]:
                 if id_field in payload and payload[id_field] is None:
@@ -247,12 +302,11 @@ class Weaviate(VectorStoreBase):
             query_properties=["data"],
             limit=top_k,
             filters=combined_filter,
-            return_properties=["hash", "created_at", "updated_at", "user_id", "agent_id", "run_id", "data", "category"],
             return_metadata=MetadataQuery(score=True),
         )
         results = []
         for obj in response.objects:
-            payload = obj.properties.copy()
+            payload = _decode_payload(obj.properties)
 
             for id_field in ["run_id", "agent_id", "user_id"]:
                 if id_field in payload and payload[id_field] is None:
@@ -294,7 +348,7 @@ class Weaviate(VectorStoreBase):
         collection = self.client.collections.get(str(self.collection_name))
 
         if payload:
-            collection.data.update(uuid=vector_id, properties=payload)
+            collection.data.update(uuid=vector_id, properties=_encode_payload(payload))
 
         if vector:
             collection.data.update(uuid=vector_id, vector=vector)
@@ -312,13 +366,10 @@ class Weaviate(VectorStoreBase):
         vector_id = get_valid_uuid(vector_id)
         collection = self.client.collections.get(str(self.collection_name))
 
-        response = collection.query.fetch_object_by_id(
-            uuid=vector_id,
-            return_properties=["hash", "created_at", "updated_at", "user_id", "agent_id", "run_id", "data", "category"],
-        )
+        response = collection.query.fetch_object_by_id(uuid=vector_id)
         if response is None:
             return None
-        payload = response.properties.copy()
+        payload = _decode_payload(response.properties)
         payload["id"] = str(response.uuid).split("'")[0]
         results = OutputData(
             id=str(response.uuid).split("'")[0],
@@ -368,11 +419,10 @@ class Weaviate(VectorStoreBase):
         response = collection.query.fetch_objects(
             limit=top_k,
             filters=combined_filter,
-            return_properties=["hash", "created_at", "updated_at", "user_id", "agent_id", "run_id", "data", "category"],
         )
         results = []
         for obj in response.objects:
-            payload = obj.properties.copy()
+            payload = _decode_payload(obj.properties)
             payload["id"] = str(obj.uuid).split("'")[0]
             results.append(OutputData(id=str(obj.uuid).split("'")[0], score=1.0, payload=payload))
         return [results]

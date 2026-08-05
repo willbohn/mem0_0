@@ -140,6 +140,10 @@ class OutputData(BaseModel):
 
 
 class PGVector(VectorStoreBase):
+    # list() is one filtered SQL SELECT. A result below the caller's safety
+    # limit is complete for that statement snapshot, and database errors propagate.
+    _mem0_supports_complete_list = True
+
     def __init__(
         self,
         dbname,

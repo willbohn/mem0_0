@@ -24,6 +24,8 @@ class OutputData(BaseModel):
 
 
 class Supabase(VectorStoreBase):
+    _mem0_max_complete_list_size = VECS_MAX_QUERY_LIMIT
+
     def __init__(
         self,
         connection_string: str,

@@ -321,6 +321,19 @@ class VectorStoreError(MemoryError):
         super().__init__(message, error_code, details, suggestion, debug_info)
 
 
+class MemoryPersistenceError(MemoryError):
+    """Raised when a multi-record write cannot be completed atomically."""
+
+    def __init__(self, message: str, *, planned_ids: Optional[list[str]] = None, cause: Exception = None):
+        super().__init__(
+            message=message,
+            error_code="PERSIST_001",
+            details={"planned_ids": planned_ids or []},
+            suggestion="Retry the operation after checking vector-store health.",
+            debug_info={"cause": type(cause).__name__ if cause is not None else None},
+        )
+
+
 
 
 class EmbeddingError(MemoryError):

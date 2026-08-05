@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,13 @@ class MemoryItem(BaseModel):
     score: Optional[float] = Field(None, description="The score associated with the text data")
     created_at: Optional[str] = Field(None, description="The timestamp when the memory was created")
     updated_at: Optional[str] = Field(None, description="The timestamp when the memory was updated")
+
+
+class RecallConfig(BaseModel):
+    mode: Literal["state_aware", "legacy"] = Field(
+        default="state_aware",
+        description="Recall ranking mode. Use legacy to preserve the pre-lifecycle ranking behavior.",
+    )
 
 
 class MemoryConfig(BaseModel):
@@ -54,6 +61,10 @@ class MemoryConfig(BaseModel):
     custom_instructions: Optional[str] = Field(
         description="Custom instructions for fact extraction",
         default=None,
+    )
+    recall: RecallConfig = Field(
+        description="Recall and memory-lifecycle behavior.",
+        default_factory=RecallConfig,
     )
 
 

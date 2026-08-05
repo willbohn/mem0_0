@@ -7,6 +7,12 @@ from mem0.configs.llms.base import BaseLlmConfig
 from mem0.llms.vllm import VllmLLM
 
 
+class CompleteListMagicMock(MagicMock):
+    """Vector-store double that promises its terminal list result is complete."""
+
+    _mem0_supports_complete_list = True
+
+
 @pytest.fixture
 def mock_vllm_client():
     with patch("mem0.llms.vllm.OpenAI") as mock_openai:
@@ -137,7 +143,7 @@ def create_mocked_memory():
     with patch('mem0.utils.factory.LlmFactory.create') as mock_llm_factory, \
          patch('mem0.utils.factory.EmbedderFactory.create') as mock_embedder_factory, \
          patch('mem0.utils.factory.VectorStoreFactory.create') as mock_vector_factory, \
-         patch('mem0.memory.storage.SQLiteManager') as mock_sqlite:
+         patch('mem0.memory.main.SQLiteManager') as mock_sqlite:
 
         mock_llm = MagicMock()
         mock_llm_factory.return_value = mock_llm
@@ -147,8 +153,9 @@ def create_mocked_memory():
         mock_embedder.embed_batch.return_value = [[0.1, 0.2, 0.3]]
         mock_embedder_factory.return_value = mock_embedder
 
-        mock_vector_store = MagicMock()
+        mock_vector_store = CompleteListMagicMock()
         mock_vector_store.search.return_value = []
+        mock_vector_store.list.return_value = ([], None)
         mock_vector_store.add.return_value = None
         mock_vector_factory.return_value = mock_vector_store
 
@@ -167,7 +174,7 @@ def create_mocked_async_memory():
     with patch('mem0.utils.factory.LlmFactory.create') as mock_llm_factory, \
          patch('mem0.utils.factory.EmbedderFactory.create') as mock_embedder_factory, \
          patch('mem0.utils.factory.VectorStoreFactory.create') as mock_vector_factory, \
-         patch('mem0.memory.storage.SQLiteManager') as mock_sqlite:
+         patch('mem0.memory.main.SQLiteManager') as mock_sqlite:
 
         mock_llm = MagicMock()
         mock_llm_factory.return_value = mock_llm
@@ -177,8 +184,9 @@ def create_mocked_async_memory():
         mock_embedder.embed_batch.return_value = [[0.1, 0.2, 0.3]]
         mock_embedder_factory.return_value = mock_embedder
 
-        mock_vector_store = MagicMock()
+        mock_vector_store = CompleteListMagicMock()
         mock_vector_store.search.return_value = []
+        mock_vector_store.list.return_value = ([], None)
         mock_vector_store.add.return_value = None
         mock_vector_factory.return_value = mock_vector_store
 
@@ -198,7 +206,9 @@ def test_thinking_tags_sync():
 
     # v3 pipeline: single LLM call returning ADD-only memories
     mock_llm.generate_response.side_effect = [
-        '<think>Sync extraction</think>\n{"memory": [{"text": "Loves sci-fi", "attributed_to": "user"}]}'
+        '<think>Sync extraction</think>\n{"memory": [{"text": "Loves sci-fi", "kind": "preference", '
+        '"subject": "user", "predicate": "movie_genre", "value": "sci-fi", "attributed_to": "user", '
+        '"evidence": {"message_index": 0, "excerpt": "sci-fi"}}]}'
     ]
 
     mock_vector_store.search.return_value = []
@@ -223,7 +233,9 @@ async def test_async_thinking_tags_async():
 
     # v3 pipeline: single LLM call returning ADD-only memories
     mock_llm.generate_response.side_effect = [
-        '<think>Async extraction</think>\n{"memory": [{"text": "Loves sci-fi", "attributed_to": "user"}]}'
+        '<think>Async extraction</think>\n{"memory": [{"text": "Loves sci-fi", "kind": "preference", '
+        '"subject": "user", "predicate": "movie_genre", "value": "sci-fi", "attributed_to": "user", '
+        '"evidence": {"message_index": 0, "excerpt": "sci-fi"}}]}'
     ]
 
     # Mock asyncio.to_thread to call the function directly (bypass threading)

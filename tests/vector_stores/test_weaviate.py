@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 import uuid
@@ -6,7 +7,13 @@ from unittest.mock import MagicMock, patch
 import dotenv
 import weaviate
 
+from mem0.exceptions import MemoryPersistenceError
+from mem0.memory.main import _discover_lifecycle_candidates
 from mem0.vector_stores.weaviate import Weaviate
+
+
+def packed_metadata(**payload):
+    return json.dumps({"_mem0_weaviate_payload_codec": 1, "payload": payload}, sort_keys=True)
 
 
 class TestWeaviateDB(unittest.TestCase):
@@ -82,6 +89,37 @@ class TestWeaviateDB(unittest.TestCase):
 
         self.weaviate_db.insert(vectors=vectors, payloads=payloads, ids=ids)
 
+    def test_insert_packs_non_schema_payload_in_versioned_metadata(self):
+        self.client_mock.batch = MagicMock()
+        batch = MagicMock()
+        self.client_mock.batch.fixed_size.return_value.__enter__.return_value = batch
+        payload = {
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "topic": "profile",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_value": {"city": "Tokyo", "confidence": 0.9},
+        }
+
+        self.weaviate_db.insert(vectors=[[0.1] * 1536], payloads=[payload], ids=[str(uuid.uuid4())])
+
+        properties = batch.add_object.call_args.kwargs["properties"]
+        assert properties["data"] == "User lives in Tokyo"
+        assert properties["user_id"] == "u1"
+        assert "topic" not in properties
+        assert "_mem0_kind" not in properties
+        envelope = json.loads(properties["metadata"])
+        assert envelope == {
+            "_mem0_weaviate_payload_codec": 1,
+            "payload": {
+                "_mem0_kind": "state",
+                "_mem0_schema_version": 1,
+                "_mem0_value": {"city": "Tokyo", "confidence": 0.9},
+                "topic": "profile",
+            },
+        }
+
     def test_get(self):
         valid_uuid = str(uuid.uuid4())
 
@@ -108,6 +146,76 @@ class TestWeaviateDB(unittest.TestCase):
         expected_payload["id"] = valid_uuid
 
         assert result.payload == expected_payload
+
+    def test_read_paths_decode_versioned_metadata(self):
+        memory_id = str(uuid.uuid4())
+        properties = {
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "metadata": packed_metadata(
+                topic="profile",
+                _mem0_schema_version=1,
+                _mem0_kind="state",
+                _mem0_state_key="user::residence",
+                _mem0_value={"city": "Tokyo"},
+                _mem0_status="active",
+            ),
+        }
+        obj = MagicMock()
+        obj.uuid = memory_id
+        obj.properties = properties
+        obj.metadata.distance = 0.2
+        obj.metadata.score = 0.8
+        response = MagicMock(objects=[obj])
+        collection = self.client_mock.collections.get.return_value
+        collection.query.hybrid.return_value = response
+        collection.query.bm25.return_value = response
+        collection.query.fetch_object_by_id.return_value = obj
+        collection.query.fetch_objects.return_value = response
+
+        search = self.weaviate_db.search("Tokyo", [0.1] * 1536, filters={"user_id": "u1"})[0]
+        keyword = self.weaviate_db.keyword_search("Tokyo", filters={"user_id": "u1"})[0]
+        fetched = self.weaviate_db.get(memory_id)
+        listed = self.weaviate_db.list(filters={"user_id": "u1"})[0][0]
+
+        for result in (search, keyword, fetched, listed):
+            assert result.payload["topic"] == "profile"
+            assert result.payload["_mem0_state_key"] == "user::residence"
+            assert result.payload["_mem0_value"] == {"city": "Tokyo"}
+            assert result.payload["data"] == "User lives in Tokyo"
+            assert "metadata" not in result.payload
+        assert "return_properties" not in collection.query.hybrid.call_args.kwargs
+        assert "return_properties" not in collection.query.bm25.call_args.kwargs
+        assert "return_properties" not in collection.query.fetch_object_by_id.call_args.kwargs
+
+    def test_decode_preserves_legacy_metadata_and_uses_documented_merge_order(self):
+        legacy_id = str(uuid.uuid4())
+        packed_id = str(uuid.uuid4())
+        legacy = MagicMock()
+        legacy.uuid = legacy_id
+        legacy.properties = {
+            "data": "Legacy direct data",
+            "metadata": "literal legacy metadata",
+            "_mem0_status": "active",
+        }
+        packed = MagicMock()
+        packed.uuid = packed_id
+        packed.properties = {
+            "data": "Direct core data",
+            "_mem0_status": "active",
+            "metadata": packed_metadata(data="packed data", _mem0_status="superseded", topic="profile"),
+        }
+        collection = self.client_mock.collections.get.return_value
+        collection.query.fetch_object_by_id.side_effect = [legacy, packed]
+
+        legacy_result = self.weaviate_db.get(legacy_id)
+        packed_result = self.weaviate_db.get(packed_id)
+
+        assert legacy_result.payload["metadata"] == "literal legacy metadata"
+        assert legacy_result.payload["_mem0_status"] == "active"
+        assert packed_result.payload["_mem0_status"] == "superseded"
+        assert packed_result.payload["topic"] == "profile"
+        assert packed_result.payload["data"] == "Direct core data"
 
     def test_get_not_found(self):
         # fetch_object_by_id returns None for an unknown id; get() must return
@@ -150,6 +258,33 @@ class TestWeaviateDB(unittest.TestCase):
 
         self.client_mock.collections.get.return_value.data.delete_by_id.assert_called_once_with("id1")
 
+    def test_update_packs_non_schema_payload_in_versioned_metadata(self):
+        collection = self.client_mock.collections.get.return_value
+
+        self.weaviate_db.update(
+            "state-id",
+            payload={
+                "data": "User lives in Tokyo",
+                "user_id": "u1",
+                "topic": "profile",
+                "_mem0_schema_version": 1,
+                "_mem0_status": "superseded",
+            },
+        )
+
+        properties = collection.data.update.call_args.kwargs["properties"]
+        assert properties["data"] == "User lives in Tokyo"
+        assert properties["user_id"] == "u1"
+        assert "topic" not in properties
+        assert "_mem0_status" not in properties
+        envelope = json.loads(properties["metadata"])
+        assert envelope["_mem0_weaviate_payload_codec"] == 1
+        assert envelope["payload"] == {
+            "_mem0_schema_version": 1,
+            "_mem0_status": "superseded",
+            "topic": "profile",
+        }
+
     def test_list(self):
         mock_objects = []
 
@@ -181,6 +316,34 @@ class TestWeaviateDB(unittest.TestCase):
         self.assertEqual(results[0][0].payload["key1"], "value1")
         self.assertEqual(results[0][1].id, "id2")
         self.assertEqual(results[0][1].payload["key2"], "value2")
+
+    def test_list_returns_stored_lifecycle_metadata_without_projection(self):
+        mock_obj = MagicMock()
+        mock_obj.uuid = "state-id"
+        mock_obj.properties = {
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "active",
+        }
+        mock_response = MagicMock(objects=[mock_obj])
+        mock_fetch = self.client_mock.collections.get.return_value.query.fetch_objects
+        mock_fetch.return_value = mock_response
+
+        results = self.weaviate_db.list(filters={"user_id": "u1"}, top_k=10)
+
+        assert results[0][0].payload["_mem0_schema_version"] == 1
+        assert results[0][0].payload["_mem0_state_key"] == "user::residence"
+        assert "return_properties" not in mock_fetch.call_args.kwargs
+
+    def test_lifecycle_candidate_discovery_rejects_incomplete_enumeration_capability(self):
+        with self.assertRaisesRegex(MemoryPersistenceError, "complete-list capability"):
+            _discover_lifecycle_candidates(self.weaviate_db, {"user_id": "u1"})
+
+        self.client_mock.collections.get.assert_not_called()
 
     def test_list_cols(self):
         mock_collection1 = MagicMock()

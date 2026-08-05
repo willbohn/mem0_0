@@ -20,6 +20,12 @@ class MockVectorMemory:
         self.score = score
 
 
+class CompleteListMagicMock(MagicMock):
+    """Vector-store double that promises its terminal list result is complete."""
+
+    _mem0_supports_complete_list = True
+
+
 @pytest.fixture
 def memory_client():
     with patch.object(Memory, "__init__", return_value=None):
@@ -233,9 +239,8 @@ def test_search_explain_includes_score_details(
     result = memory.search("test query", filters={"user_id": "test"}, explain=True)
 
     details = result["results"][0]["score_details"]
-    assert details["semantic_score"] == 0.8
-    assert details["bm25_score"] > 0
-    assert details["entity_boost"] == 0.0
+    assert details["fusion_ranks"] == {"semantic": 1, "keyword": 1}
+    assert details["fusion_source_scores"] == {"semantic": 0.8, "keyword": 5.0}
     assert details["final_score"] == result["results"][0]["score"]
     assert details["threshold"] == 0.1
 
@@ -694,7 +699,7 @@ def test_add_infer_false_embeds_once(mock_sqlite, mock_llm_factory, mock_vector_
     mock_vector_store = MagicMock()
     mock_vector_store.search.return_value = []
     mock_vector_store.insert.return_value = None
-    mock_vector_store.get.return_value = None
+    mock_vector_store.get.return_value = MagicMock(id="persisted", payload={})
     telemetry_vector_store = MagicMock()
     mock_vector_factory.side_effect = [mock_vector_store, telemetry_vector_store]
 
@@ -713,7 +718,7 @@ def test_add_infer_false_embeds_once(mock_sqlite, mock_llm_factory, mock_vector_
 @patch('mem0.utils.factory.EmbedderFactory.create')
 @patch('mem0.utils.factory.VectorStoreFactory.create')
 @patch('mem0.utils.factory.LlmFactory.create')
-@patch('mem0.memory.storage.SQLiteManager')
+@patch('mem0.memory.main.SQLiteManager')
 def test_add_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm_factory, mock_vector_factory, mock_embedder_factory):
     """
     Regression test for issue #3723 (infer=True path): when the LLM rewrites a fact during the
@@ -724,17 +729,29 @@ def test_add_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm_fa
     embedder.config = MagicMock(embedding_dims=3)
     mock_embedder_factory.return_value = embedder
 
-    mock_vector_store = MagicMock()
+    mock_vector_store = CompleteListMagicMock()
     mock_vector_store.search.return_value = []
+    mock_vector_store.list.return_value = ([], None)
     mock_vector_store.insert.return_value = None
-    mock_vector_store.get.return_value = None
+    mock_vector_store.get.return_value = MagicMock(id="persisted", payload={})
     telemetry_vector_store = MagicMock()
     mock_vector_factory.side_effect = [mock_vector_store, telemetry_vector_store]
 
     # V3 single-call extraction: LLM returns extracted memories directly
     mock_llm = MagicMock()
     mock_llm.generate_response.return_value = json.dumps(
-        {"memory": [{"text": "The user enjoys Python"}]}
+        {
+            "memory": [
+                {
+                    "text": "The user enjoys Python",
+                    "kind": "preference",
+                    "subject": "user",
+                    "predicate": "programming_language_preference",
+                    "value": "Python",
+                    "evidence": {"message_index": 0, "excerpt": "like Python"},
+                }
+            ]
+        }
     )
     mock_llm_factory.return_value = mock_llm
 
@@ -758,7 +775,7 @@ def test_add_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm_fa
 @patch('mem0.utils.factory.EmbedderFactory.create')
 @patch('mem0.utils.factory.VectorStoreFactory.create')
 @patch('mem0.utils.factory.LlmFactory.create')
-@patch('mem0.memory.storage.SQLiteManager')
+@patch('mem0.memory.main.SQLiteManager')
 def test_update_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm_factory, mock_vector_factory, mock_embedder_factory):
     """
     Regression test for issue #3723 (infer=True path): V3 is ADD-only, so this test verifies
@@ -779,8 +796,9 @@ def test_update_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm
         },
     )
 
-    mock_vector_store = MagicMock()
+    mock_vector_store = CompleteListMagicMock()
     mock_vector_store.search.return_value = [existing_memory]
+    mock_vector_store.list.return_value = ([], None)
     mock_vector_store.get.return_value = existing_memory
     mock_vector_store.insert.return_value = None
     mock_vector_store.update.return_value = None
@@ -791,7 +809,18 @@ def test_update_infer_true_caches_embedding_on_llm_rewrite(mock_sqlite, mock_llm
     # V3 single-call extraction: LLM returns extracted memories directly
     mock_llm = MagicMock()
     mock_llm.generate_response.return_value = json.dumps(
-        {"memory": [{"text": "The user loves Python"}]}
+        {
+            "memory": [
+                {
+                    "text": "The user loves Python",
+                    "kind": "preference",
+                    "subject": "user",
+                    "predicate": "programming_language_preference",
+                    "value": "Python",
+                    "evidence": {"message_index": 0, "excerpt": "love Python"},
+                }
+            ]
+        }
     )
     mock_llm_factory.return_value = mock_llm
 

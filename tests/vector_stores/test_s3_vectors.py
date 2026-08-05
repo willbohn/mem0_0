@@ -272,3 +272,26 @@ def test_list_filters_metadata_client_side(mock_boto_client):
     [results] = store.list(filters={"user_id": "alice", "category": "work"})
 
     assert [result.id for result in results] == ["id1"]
+
+
+def test_lifecycle_complete_list_hook_paginates_and_stops_at_safety_limit(mock_boto_client):
+    def pages():
+        yield {
+            "vectors": [
+                {"key": "id1", "metadata": {"user_id": "alice"}},
+                {"key": "other", "metadata": {"user_id": "bob"}},
+            ]
+        }
+        yield {"vectors": [{"key": "id2", "metadata": {"user_id": "alice"}}]}
+        raise AssertionError("complete-list hook read beyond its safety limit")
+
+    mock_boto_client.get_paginator.return_value.paginate.return_value = pages()
+    store = S3Vectors(
+        vector_bucket_name=BUCKET_NAME,
+        collection_name=INDEX_NAME,
+        embedding_model_dims=EMBEDDING_DIMS,
+    )
+
+    results = store._mem0_list_complete(filters={"user_id": "alice"}, top_k=2)
+
+    assert [result.id for result in results[0]] == ["id1", "id2"]

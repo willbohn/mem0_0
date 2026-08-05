@@ -4,6 +4,8 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from mem0.configs.vector_stores.supabase import IndexMeasure, IndexMethod
+from mem0.exceptions import MemoryPersistenceError
+from mem0.memory.main import _discover_lifecycle_candidates
 from mem0.vector_stores.supabase import VECS_MAX_QUERY_LIMIT, Supabase
 
 
@@ -183,6 +185,13 @@ def test_list_clamps_top_k_to_vecs_limit(supabase_instance, mock_collection, cap
     assert kwargs["limit"] == VECS_MAX_QUERY_LIMIT
     assert "5000" in caplog.text
     assert str(VECS_MAX_QUERY_LIMIT) in caplog.text
+
+
+def test_lifecycle_discovery_rejects_supabase_complete_list_capability(supabase_instance, mock_collection):
+    with pytest.raises(MemoryPersistenceError, match="complete-list capability"):
+        _discover_lifecycle_candidates(supabase_instance, {"user_id": "u1"})
+
+    mock_collection.query.assert_not_called()
 
 
 def test_col_info_does_not_raise(supabase_instance):

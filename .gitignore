@@ -191,3 +191,5 @@ qdrant_storage/
 testing.ipynb
 .weave/
 
+# Local agent execution ledgers and review packages
+.superpowers/

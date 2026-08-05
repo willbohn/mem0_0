@@ -54,7 +54,7 @@
 All benchmarks run on the same production-representative model stack. Single-pass retrieval (one call, no agentic loops) at a top_200 retrieval budget. Scores reflect Mem0's managed platform, which includes proprietary optimizations not available in the open-source SDK; open-source users should expect directionally similar gains but not identical numbers.
 
 **What changed:**
-- **Single-pass ADD-only extraction** -- one LLM call, no UPDATE/DELETE. Memories accumulate; nothing is overwritten.
+- **Single-pass evidence-bound extraction** -- one LLM call. Python OSS preserves every state version while marking explicit corrections as superseded and ambiguous conflicts as disputed; automatic maintenance never hard-deletes memories.
 - **Agent-generated facts are first-class** -- when an agent confirms an action, that information is now stored with equal weight.
 - **Entity linking** -- entities are extracted, embedded, and linked across memories for retrieval boosting.
 - **Multi-signal retrieval** -- semantic, BM25 keyword, and entity matching scored in parallel and fused.

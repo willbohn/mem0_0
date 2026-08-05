@@ -479,7 +479,8 @@ Accuracy and completeness are critical. Every piece of memorable information mus
 
 ## New Messages
 
-The current conversation turn(s) with "role" (user/assistant) and "content".
+The current evidence-eligible conversation turn(s), each with its original `message_index`, "role"
+(user/assistant), and "content". System messages are excluded.
 
 Both roles contain extractable information:
 - **User messages**: Personal facts, preferences, plans, experiences, things done / never done before, opinions, requests, implicit preferences revealed through questions
@@ -923,8 +924,8 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 
 {
   "memory": [
-    {"id": "0", "text": "First extracted memory", "attributed_to": "user", "linked_memory_ids": ["uuid-of-related-existing-memory"]},
-    {"id": "1", "text": "Second extracted memory", "attributed_to": "assistant"}
+    {"id": "0", "text": "First extracted memory", "kind": "state", "subject": "user", "predicate": "residence", "value": "Tokyo", "attributed_to": "user", "evidence": {"message_index": 0, "excerpt": "I live in Tokyo"}, "relation": "supersedes", "linked_memory_ids": ["id-of-related-existing-memory"]},
+    {"id": "1", "text": "Second extracted memory", "kind": "event", "subject": "user", "predicate": "attended", "value": "conference", "attributed_to": "assistant", "evidence": {"message_index": 1, "excerpt": "attended the conference"}}
   ]
 }
 
@@ -932,12 +933,21 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 
 - **id** (string, required): Sequential integers as strings starting at "0".
 - **text** (string, required): A contextually rich, self-contained factual statement (15-80 words).
+- **kind** (string, required): Exactly one of "state", "preference", "event", "plan", "relationship", "instruction", or "procedure".
+- **subject** (string, required): Normalized subject of the fact, such as "user", "user.employment", or a named entity.
+- **predicate** (string, required): Stable relation or attribute name, such as "residence", "employer", or "attended".
+- **value** (string, required): The explicit value asserted by the evidence. Do not infer a value.
 - **attributed_to** (string, required): Who this memory is about. Use "user" for facts stated by or about the user (preferences, plans, personal facts). Use "assistant" for information provided by the assistant (recommendations, confirmations, plans created, information researched).
+- **evidence** (object, required): `message_index` is the explicit original index shown on the matching New Messages object, and `excerpt` is an exact, non-empty substring of that non-system message. Never cite Summary, Existing Memories, Last k Messages, or a system message.
+- **relation** (string, optional): Use "corroborates" for the same state key and value, "supersedes" only for an explicit replacement value, and "conflicts_with" when evidence is ambiguous or contradictory. Omit for independent facts and events.
+- **valid_from** / **valid_to** (string, optional): Explicit temporal validity only; never invent dates.
 - **linked_memory_ids** (array of strings, optional): IDs of Existing Memories that this new memory relates to. Use the exact IDs from the Existing Memories list. Omit or pass [] if no existing memories are related.
 
 ## Rules
 
 - Extract every piece of memorable information as a separate memory object.
+- Every returned memory must include exact evidence. If no exact non-system excerpt supports it, omit it.
+- Events and independent preferences remain separate memories; do not mark them as superseding merely because they are newer or similar.
 - If nothing is worth extracting, return: {"memory": []}
 - No duplicate IDs. Use double quotes. No trailing commas.
 

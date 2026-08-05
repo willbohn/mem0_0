@@ -184,6 +184,12 @@ const expiring = memory.add(messages, {
   Use `infer=False` only when you need to store raw transcripts. Most workflows benefit from Mem0 extracting structured memories automatically.
 </Tip>
 
+<Note>
+  Python OSS inference uses one evidence-bound extraction call. Each admitted memory must cite an exact excerpt and source-message index from a non-system message. State memories can corroborate, supersede, or dispute earlier values while preserving every version; events and independent preferences are not replaced merely because they are newer or semantically similar. Embeddings complete before persistence, and every inserted ID is verified; incomplete provider batches are compensated and raise `MemoryPersistenceError`.
+</Note>
+
+Lifecycle fields beginning with `_mem0_` are reserved and ignored in caller-supplied update metadata. In state-aware mode, lifecycle-managed state-like memories cannot have their text edited in place because that would invalidate their value and version links; call `add()` with the correction instead. Legacy records and `recall.mode="legacy"` retain the existing update behavior.
+
 <Warning>
 If you do choose `infer=False`, keep it consistent. Raw inserts skip inference, so a later `infer=True` call with the same content can create a second memory.
 </Warning>
@@ -213,7 +219,7 @@ For full list of supported fields, required formats, and advanced options, see t
 
 | Capability | Mem0 Platform | Mem0 OSS |
 | --- | --- | --- |
-| Add behavior | ADD-only; memories accumulate | ADD-only; you control storage |
+| Add behavior | ADD-only; memories accumulate | Python: evidence-bound lifecycle with preserved versions; TypeScript: existing ADD behavior |
 | Rate limits | Managed quotas per workspace | Limited by your hardware and provider APIs |
 | Dashboard visibility | Yes: inspect memories visually | Inspect via CLI, logs, or custom UI |
 

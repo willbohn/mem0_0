@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, Mock
 
 import pytest
 
-from mem0.exceptions import LLMError
+from mem0.configs.base import MemoryConfig, RecallConfig
+from mem0.exceptions import LLMError, MemoryPersistenceError
 from mem0.memory.main import AsyncMemory, Memory
 
 
@@ -470,6 +471,110 @@ async def test_async_update_memory_metadata_cannot_change_identity_fields(mocker
     assert payload["data"] == "new memory"
 
 
+def test_update_memory_ignores_reserved_lifecycle_metadata(mocker):
+    memory = _build_memory_instance(mocker, Memory)
+    memory.config = MemoryConfig(recall=RecallConfig(mode="state_aware"))
+    memory.vector_store.get.return_value = MagicMock(
+        payload={
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "superseded",
+        }
+    )
+
+    memory._update_memory(
+        "memory-id",
+        "User lives in Tokyo",
+        {},
+        metadata={"_mem0_status": "active", "topic": "profile"},
+    )
+
+    payload = memory.vector_store.update.call_args.kwargs["payload"]
+    assert payload["_mem0_status"] == "superseded"
+    assert payload["topic"] == "profile"
+
+
+@pytest.mark.asyncio
+async def test_async_update_memory_ignores_reserved_lifecycle_metadata(mocker):
+    memory = _build_memory_instance(mocker, AsyncMemory)
+    memory.config = MemoryConfig(recall=RecallConfig(mode="state_aware"))
+    memory.vector_store.get.return_value = MagicMock(
+        payload={
+            "data": "User lives in Tokyo",
+            "user_id": "u1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "superseded",
+        }
+    )
+
+    await memory._update_memory(
+        "memory-id",
+        "User lives in Tokyo",
+        {},
+        metadata={"_mem0_status": "active", "topic": "profile"},
+    )
+
+    payload = memory.vector_store.update.call_args.kwargs["payload"]
+    assert payload["_mem0_status"] == "superseded"
+    assert payload["topic"] == "profile"
+
+
+def test_state_aware_update_rejects_in_place_state_text_change(mocker):
+    memory = _build_memory_instance(mocker, Memory)
+    memory.config = MemoryConfig(recall=RecallConfig(mode="state_aware"))
+    memory.vector_store.get.return_value = MagicMock(
+        payload={
+            "data": "User lives in Tokyo",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "active",
+        }
+    )
+
+    with pytest.raises(MemoryPersistenceError, match="add a correction"):
+        memory._update_memory("memory-id", "User lives in Kyoto", {}, metadata={})
+
+    memory.embedding_model.embed.assert_not_called()
+    memory.vector_store.update.assert_not_called()
+    memory.db.add_history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_state_aware_update_rejects_in_place_state_text_change(mocker):
+    memory = _build_memory_instance(mocker, AsyncMemory)
+    memory.config = MemoryConfig(recall=RecallConfig(mode="state_aware"))
+    memory.vector_store.get.return_value = MagicMock(
+        payload={
+            "data": "User lives in Tokyo",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "_mem0_schema_version": 1,
+            "_mem0_kind": "state",
+            "_mem0_state_key": "user::residence",
+            "_mem0_value": "Tokyo",
+            "_mem0_status": "active",
+        }
+    )
+
+    with pytest.raises(MemoryPersistenceError, match="add a correction"):
+        await memory._update_memory("memory-id", "User lives in Kyoto", {}, metadata={})
+
+    memory.embedding_model.embed.assert_not_called()
+    memory.vector_store.update.assert_not_called()
+    memory.db.add_history.assert_not_called()
+
+
 def test_create_then_search_and_get_all_return_same_timestamps(mocker):
     """Reproduces issue #3720: created_at must be identical in search() and get_all()."""
     memory = _build_memory_instance(mocker, Memory)
@@ -696,10 +801,9 @@ class TestMetadataNotMutated:
         assert result[1]["role"] == "assistant"
         assert result[1]["actor_id"] == "bot-1"
 
-        # Verify each insert got distinct payloads with correct roles
-        insert_calls = memory.vector_store.insert.call_args_list
-        first_payload = insert_calls[0].kwargs["payloads"][0]
-        second_payload = insert_calls[1].kwargs["payloads"][0]
+        # Atomic raw writes persist one complete batch with distinct payloads.
+        memory.vector_store.insert.assert_called_once()
+        first_payload, second_payload = memory.vector_store.insert.call_args.kwargs["payloads"]
         assert first_payload["role"] == "user"
         assert "actor_id" not in first_payload  # user message has no name
         assert second_payload["role"] == "assistant"
@@ -1008,7 +1112,11 @@ class TestAddPipelineEntityEmbeddingCountGuard:
 
     def test_sync_short_entity_embeddings_still_link_valid_entity(self, mock_memory, mocker, caplog):
         mock_memory.llm.generate_response.return_value = (
-            '{"memory": [{"text": "Alice met Bob"}, {"text": "Bob called Alice"}]}'
+            '{"memory": ['
+            '{"text": "Alice met Bob", "kind": "event", "subject": "Alice", "predicate": "met", '
+            '"value": "Bob", "evidence": {"message_index": 0, "excerpt": "Alice met Bob"}}, '
+            '{"text": "Bob called Alice", "kind": "event", "subject": "Bob", "predicate": "called", '
+            '"value": "Alice", "evidence": {"message_index": 0, "excerpt": "Bob called Alice"}}]}'
         )
         mock_memory.embedding_model = Mock()
         mock_memory.embedding_model.embed_batch = Mock(side_effect=self._short_entity_embed_batch)
@@ -1052,7 +1160,11 @@ class TestAddPipelineEntityEmbeddingCountGuard:
     @pytest.mark.asyncio
     async def test_async_short_entity_embeddings_still_link_valid_entity(self, mock_async_memory, mocker, caplog):
         mock_async_memory.llm.generate_response.return_value = (
-            '{"memory": [{"text": "Alice met Bob"}, {"text": "Bob called Alice"}]}'
+            '{"memory": ['
+            '{"text": "Alice met Bob", "kind": "event", "subject": "Alice", "predicate": "met", '
+            '"value": "Bob", "evidence": {"message_index": 0, "excerpt": "Alice met Bob"}}, '
+            '{"text": "Bob called Alice", "kind": "event", "subject": "Bob", "predicate": "called", '
+            '"value": "Alice", "evidence": {"message_index": 0, "excerpt": "Bob called Alice"}}]}'
         )
         mock_async_memory.embedding_model = Mock()
         mock_async_memory.embedding_model.embed_batch = Mock(side_effect=self._short_entity_embed_batch)
