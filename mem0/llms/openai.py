@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 from typing import Dict, List, Optional, Union
 
@@ -36,6 +37,12 @@ class OpenAILLM(LLMBase):
 
         super().__init__(config)
 
+        self._lmstudio_compat = os.getenv("MEM0_LMSTUDIO_COMPAT", "").lower() in {"1", "true", "yes", "on"}
+        self._lmstudio_reasoning_effort = os.getenv("MEM0_LMSTUDIO_REASONING_EFFORT", "none").lower()
+        if self._lmstudio_compat and self._lmstudio_reasoning_effort not in {"none", "low", "medium", "high"}:
+            raise ValueError("MEM0_LMSTUDIO_REASONING_EFFORT must be one of: none, low, medium, high")
+        self._lmstudio_timeout = self._parse_lmstudio_timeout() if self._lmstudio_compat else None
+
         if not self.config.model:
             self.config.model = "gpt-5-mini"
 
@@ -49,8 +56,20 @@ class OpenAILLM(LLMBase):
         else:
             api_key = self.config.api_key or os.getenv("OPENAI_API_KEY")
             base_url = self.config.openai_base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            client_options = {"api_key": api_key, "base_url": base_url}
+            if self._lmstudio_compat:
+                client_options["timeout"] = self._lmstudio_timeout
+            self.client = OpenAI(**client_options)
 
-            self.client = OpenAI(api_key=api_key, base_url=base_url)
+    def _parse_lmstudio_timeout(self) -> float:
+        raw_timeout = os.getenv("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS", "300")
+        try:
+            timeout = float(raw_timeout)
+        except ValueError as exc:
+            raise ValueError("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS must be between 1 and 600") from exc
+        if not math.isfinite(timeout) or not 1 <= timeout <= 600:
+            raise ValueError("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS must be between 1 and 600")
+        return timeout
 
     def _parse_response(self, response, tools):
         """
@@ -104,12 +123,8 @@ class OpenAILLM(LLMBase):
             json: The generated response.
         """
         params = self._get_supported_params(messages=messages, **kwargs)
-        lmstudio_compat = os.getenv("MEM0_LMSTUDIO_COMPAT", "").lower() in {"1", "true", "yes", "on"}
-        if lmstudio_compat:
-            reasoning_effort = os.getenv("MEM0_LMSTUDIO_REASONING_EFFORT", "none").lower()
-            if reasoning_effort not in {"none", "low", "medium", "high"}:
-                raise ValueError("MEM0_LMSTUDIO_REASONING_EFFORT must be one of: none, low, medium, high")
-            params["reasoning_effort"] = reasoning_effort
+        if self._lmstudio_compat:
+            params["reasoning_effort"] = self._lmstudio_reasoning_effort
         
         params.update({
             "model": self.config.model,
@@ -144,7 +159,11 @@ class OpenAILLM(LLMBase):
             # ``json_schema`` but rejects OpenAI's legacy ``json_object``.
             # Keep the compatibility switch explicit so normal OpenAI users
             # retain the upstream request shape.
-            if lmstudio_compat and isinstance(response_format, dict) and response_format.get("type") == "json_object":
+            if (
+                self._lmstudio_compat
+                and isinstance(response_format, dict)
+                and response_format.get("type") == "json_object"
+            ):
                 params["response_format"] = {"type": "text"}
             else:
                 params["response_format"] = response_format

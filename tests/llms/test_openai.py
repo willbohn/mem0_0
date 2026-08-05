@@ -499,12 +499,35 @@ def test_lmstudio_compat_accepts_an_explicit_bounded_reasoning_effort(mock_opena
 def test_lmstudio_compat_rejects_an_unbounded_reasoning_effort(mock_openai_client, monkeypatch):
     monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
     monkeypatch.setenv("MEM0_LMSTUDIO_REASONING_EFFORT", "unbounded")
-    llm = OpenAILLM(OpenAIConfig(model="local-model"))
 
     with pytest.raises(ValueError, match="MEM0_LMSTUDIO_REASONING_EFFORT"):
-        llm.generate_response([{"role": "user", "content": "Return JSON"}])
+        OpenAILLM(OpenAIConfig(model="local-model"))
 
     mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_lmstudio_compat_bounds_the_upstream_client_timeout(monkeypatch):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS", "42")
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with patch("mem0.llms.openai.OpenAI") as constructor:
+        OpenAILLM(OpenAIConfig(model="local-model"))
+
+    assert constructor.call_args.kwargs["timeout"] == 42.0
+
+
+@pytest.mark.parametrize("timeout", ["0", "601", "nan", "invalid"])
+def test_lmstudio_compat_rejects_an_invalid_upstream_timeout(monkeypatch, timeout):
+    monkeypatch.setenv("MEM0_LMSTUDIO_COMPAT", "true")
+    monkeypatch.setenv("MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS", timeout)
+
+    with patch("mem0.llms.openai.OpenAI") as constructor:
+        with pytest.raises(ValueError, match="MEM0_LMSTUDIO_REQUEST_TIMEOUT_SECONDS"):
+            OpenAILLM(OpenAIConfig(model="local-model"))
+
+    constructor.assert_not_called()
 
 
 def test_lmstudio_compat_disabled_preserves_json_object(mock_openai_client, monkeypatch):
