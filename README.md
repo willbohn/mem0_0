@@ -42,6 +42,18 @@
   <a href="https://mem0.ai/research"><strong>📄 Benchmarking Mem0's token-efficient memory algorithm →</strong></a>
 </p>
 
+## State-aware OSS work in this fork
+
+This branch develops a compatibility-preserving state-aware memory lifecycle and retrieval path for the open-source Python SDK, REST server, and TypeScript OSS SDK.
+
+- **Current and historical truth:** ordinary current-state recall suppresses superseded facts, historical queries can still retrieve earlier states, and ambiguous conflicts remain disputed instead of being silently deleted.
+- **Compatibility:** existing `mem0`/`mem0ai` imports, API paths, environment variables, response envelopes, MCP tool names, and legacy records remain supported. `legacy` recall mode preserves the former ordering and scoring behavior.
+- **Operational safety:** lifecycle writes fail closed on incomplete persistence, private lifecycle metadata stays out of ordinary public results, and automatic maintenance archives or suppresses rather than hard-deleting memories.
+
+> **Acceptance status:** The implementation candidate `75021d0a` has passed the full Python, REST, deployment, and TypeScript suites, plus bounded shadow-deployment, reconciliation, and synthetic lifecycle checks. The official acceptance benchmark has **not** run. The managed-platform results below are upstream context, not acceptance evidence for this OSS candidate. Production cutover and installed-harness retargeting have not occurred; the legacy deployment remains intact.
+
+See the [rollout design](./docs/designs/mem0-0-state-aware-rollout.md), [current handover](./docs/designs/mem0-0-state-aware-handover.md), [evaluation overlay](./evaluation_overlay/README.md), and [local deployment runbook](./deployment/mem0_0_arch/README.md).
+
 ## New Memory Algorithm (April 2026)
 
 | Benchmark | Old | New  | Tokens  | Latency p50  |

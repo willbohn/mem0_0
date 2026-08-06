@@ -1,6 +1,6 @@
 # mem0_0 State-Aware Implementation Handover
 
-Last refreshed: 2026-08-06 09:22 JST
+Last refreshed: 2026-08-06 16:08 JST
 
 This handover is for the next agent continuing the state-aware lifecycle, benchmark, and local deployment work in `/home/will/Documents/CodingWorkspaces/mem0_0`. Treat it as a checkpoint, not as authority over the current repository or runtime: re-run the content-free checks below before changing anything.
 
@@ -84,7 +84,7 @@ Primary files:
 
 ## Current local deployment snapshot
 
-Refreshed content-free on 2026-08-06 at 09:22 JST:
+Refreshed content-free on 2026-08-06 at 14:11 JST:
 
 | Resource | Legacy | Canonical shadow |
 |---|---|---|
@@ -183,10 +183,13 @@ Fresh verification on `75021d0a` reported:
 - Fresh adversarial review of the final delta: no correctness findings; its focused benchmark/deployment selection passed 29 tests.
 - Git worktree was clean after verification, and the temporary Redis Stack fixture was stopped and removed.
 
-Known verification limitations:
+TypeScript differential follow-up, refreshed on 2026-08-06 at 16:08 JST:
 
-- `tsc --noEmit` still reports 18 missing Jest/LangChain declaration errors that were classified as pre-existing/unrelated to this branch. Reproduce on the base tree before deciding whether to fix them here.
-- `pnpm run test` failed in the wrapper environment with `unable to open database file`; invoking the installed Jest binary directly passed the suite. Diagnose the wrapper separately and do not hide this distinction.
+- `./node_modules/.bin/tsc --noEmit` exits 2 with exactly the same 26 diagnostics on local `main` at `50bdaaea` and the feature checkout. The current count supersedes the earlier handover count of 18.
+- The shared diagnostics comprise 15 missing Jest globals/type declarations and 11 errors under the optional LangChain community integration. There are no candidate-only diagnostics.
+- Inside the restricted Codex filesystem sandbox, both revisions fail before Jest starts: `pnpm run test` and even `pnpm config` report `unable to open database file`. A direct-Jest base run in that sandbox also produced one read-only SQLite failure.
+- With normal host access, the exact `pnpm run test` command passes on both revisions. Local `main` reports 89 suites and 1,427 tests passed with 5 suites/42 tests skipped; the feature reports 91 suites and 1,458 tests passed with 5 suites/42 tests skipped.
+- The feature therefore adds 2 passing suites and 31 passing tests with no TypeScript suite regression. Treat the pnpm database and read-only SQLite failures as harness-environment limitations, not branch failures. Do not add an unrelated TypeScript fix to this branch for them.
 
 Useful Python verification command:
 
@@ -224,13 +227,12 @@ Acceptance still requires:
 ## Recommended continuation order
 
 1. Re-attest Git and runtime state using the content-free commands above.
-2. Reproduce the TypeScript declaration and `pnpm run test` wrapper failures on both `main` and the feature candidate; record whether they are truly pre-existing.
-3. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
-4. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
-5. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
-6. Run the full Python, server, deployment, and TypeScript suites again, then use fresh verifier and critic agents.
-7. Obtain approval for the exact final SHA and push the feature branch without force.
-8. Only after all gates pass, take a new quiesced encrypted snapshot, reconcile it, exercise the cutover recorder and rollback drill, retarget backed-up harness configs atomically, and disable but retain the old unit.
+2. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
+3. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
+4. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
+5. Run the full Python, server, deployment, and TypeScript suites again, then use fresh verifier and critic agents.
+6. Obtain approval for the exact final SHA and push the feature branch without force.
+7. Only after all gates pass, take a new quiesced encrypted snapshot, reconcile it, exercise the cutover recorder and rollback drill, retarget backed-up harness configs atomically, and disable but retain the old unit.
 
 ## Commands that remain intentionally blocked
 
