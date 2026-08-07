@@ -5,10 +5,12 @@ require ``transformers`` / ``torch`` to be installed.
 """
 
 import math
+from unittest.mock import MagicMock
 
 import pytest
 
-from mem0.reranker.huggingface_reranker import HuggingFaceReranker
+from mem0.configs.rerankers.huggingface import HuggingFaceRerankerConfig
+from mem0.reranker.huggingface_reranker import TRANSFORMERS_AVAILABLE, HuggingFaceReranker
 
 
 def _sigmoid(x):
@@ -49,3 +51,39 @@ class TestHuggingFaceNormalizeScores:
 
     def test_empty_scores(self):
         assert HuggingFaceReranker._normalize_scores([]) == []
+
+
+@pytest.fixture
+def mock_huggingface_model(monkeypatch):
+    """Fake tokenizer/model classes so HuggingFaceReranker constructs without downloading weights."""
+    import mem0.reranker.huggingface_reranker as hf_reranker
+
+    fake_tokenizer = MagicMock()
+    fake_model = MagicMock()
+    fake_model.to.return_value = fake_model
+
+    fake_tokenizer_cls = MagicMock()
+    fake_tokenizer_cls.from_pretrained.return_value = fake_tokenizer
+    fake_model_cls = MagicMock()
+    fake_model_cls.from_pretrained.return_value = fake_model
+
+    monkeypatch.setattr(hf_reranker, "AutoTokenizer", fake_tokenizer_cls)
+    monkeypatch.setattr(hf_reranker, "AutoModelForSequenceClassification", fake_model_cls)
+
+    reranker = hf_reranker.HuggingFaceReranker(HuggingFaceRerankerConfig())
+    return reranker, fake_tokenizer
+
+
+@pytest.mark.skipif(not TRANSFORMERS_AVAILABLE, reason="transformers/torch not installed")
+class TestHuggingFaceFallbackNonMutation:
+    def test_failed_rerank_does_not_mutate_caller_documents(self, mock_huggingface_model):
+        reranker, fake_tokenizer = mock_huggingface_model
+        fake_tokenizer.side_effect = RuntimeError("tokenizer error")
+
+        docs = [{"memory": "a"}, {"memory": "b"}]
+        original = [d.copy() for d in docs]
+
+        result = reranker.rerank("q", docs, top_k=2)
+
+        assert docs == original
+        assert all(item["rerank_score"] == 0.0 for item in result)

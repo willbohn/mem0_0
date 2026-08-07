@@ -79,6 +79,19 @@ class TestCohereFallbackTopK:
 
         assert len(result) == 5
 
+    def test_fallback_does_not_mutate_caller_documents(self, mock_cohere):
+        module, fake_client = mock_cohere
+        fake_client.rerank.side_effect = RuntimeError("API error")
+
+        reranker = module.CohereReranker(CohereRerankerConfig(api_key="test-key"))
+        docs = _docs(2)
+        original = [d.copy() for d in docs]
+
+        result = reranker.rerank("query", docs)
+
+        assert docs == original
+        assert all(item["rerank_score"] == 0.0 for item in result)
+
 
 class TestZeroEntropyFallbackTopK:
     def test_fallback_respects_config_top_k(self, mock_zero_entropy):
@@ -107,3 +120,16 @@ class TestZeroEntropyFallbackTopK:
         result = reranker.rerank("query", _docs(5))
 
         assert len(result) == 5
+
+    def test_fallback_does_not_mutate_caller_documents(self, mock_zero_entropy):
+        module, fake_client = mock_zero_entropy
+        fake_client.models.rerank.side_effect = RuntimeError("API error")
+
+        reranker = module.ZeroEntropyReranker(ZeroEntropyRerankerConfig(api_key="test-key"))
+        docs = _docs(2)
+        original = [d.copy() for d in docs]
+
+        result = reranker.rerank("query", docs)
+
+        assert docs == original
+        assert all(item["rerank_score"] == 0.0 for item in result)
