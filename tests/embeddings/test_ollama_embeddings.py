@@ -94,3 +94,18 @@ def test_embed_batch_count_mismatch_raises(mock_ollama_client):
 
     with pytest.raises(ValueError, match="returned 1 embeddings for 2 texts"):
         embedder.embed_batch(["first text", "second text"])
+
+
+def test_import_without_ollama_raises_import_error(monkeypatch):
+    import builtins
+    import importlib
+    import sys
+
+    monkeypatch.setattr(builtins, "input", lambda *_a: pytest.fail("interactive install prompt ran"))
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    sys.modules.pop("mem0.embeddings.ollama", None)
+    try:
+        with pytest.raises(ImportError, match="ollama"):
+            importlib.import_module("mem0.embeddings.ollama")
+    finally:
+        sys.modules.pop("mem0.embeddings.ollama", None)
