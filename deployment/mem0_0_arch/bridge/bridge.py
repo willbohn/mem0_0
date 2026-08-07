@@ -161,7 +161,7 @@ class Mem0Bridge:
         (
             "search_memories",
             "Search only within one explicit scope.",
-            {"query": {"type": "string"}, "top_k": {"type": "integer"}},
+            {"query": {"type": "string"}, "top_k": {"type": "integer"}, "max_chars": {"type": "integer"}},
         ),
         ("get_memories", "List only memories within one explicit scope.", {"top_k": {"type": "integer"}}),
         ("get_memory", "Get one memory by explicit ID within one scope.", {"memory_id": {"type": "string"}}),
@@ -316,6 +316,13 @@ class Mem0Bridge:
             top_k = args.get("top_k", self.max_results)
             if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= self.max_results:
                 raise BridgeError("invalid_argument", f"top_k must be between 1 and {self.max_results}")
+            max_chars = args.get("max_chars", MAX_CONTENT_CHARS)
+            if (
+                isinstance(max_chars, bool)
+                or not isinstance(max_chars, int)
+                or not 1 <= max_chars <= MAX_CONTENT_CHARS
+            ):
+                raise BridgeError("invalid_argument", f"max_chars must be between 1 and {MAX_CONTENT_CHARS}")
             response = self._request(
                 "POST",
                 "/search",
@@ -323,7 +330,20 @@ class Mem0Bridge:
             )
             rows = [row for row in _rows(response) if self._row_in_scope(row, scope)]
             _reject_secrets(rows)
-            return {"results": rows}
+            selected: list[dict[str, Any]] = []
+            omitted = 0
+            char_count = 0
+            for row in rows:
+                text = str(row.get("memory") or "")
+                if char_count + len(text) > max_chars:
+                    omitted += 1
+                    continue
+                selected.append(row)
+                char_count += len(text)
+            result: dict[str, Any] = {"results": selected}
+            if omitted:
+                result["omitted_for_budget"] = omitted
+            return result
 
         if name == "get_memories":
             top_k = args.get("top_k", self.max_results)

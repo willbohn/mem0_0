@@ -186,6 +186,13 @@ def scope() -> dict[str, str]:
     }
 
 
+@pytest.fixture
+def fake_server_bridge(key_file: Path):
+    with fake_mem0_server() as (state, server):
+        bridge = Mem0Bridge(api_url=f"http://127.0.0.1:{server.server_port}", api_key_file=key_file, timeout=1)
+        yield bridge, state
+
+
 def test_runtime_identity_and_tool_names_are_canonical(key_file: Path) -> None:
     bridge = Mem0Bridge(api_key_file=key_file)
     initialized = bridge.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
@@ -354,3 +361,59 @@ def test_mcp_ping_and_invalid_scope_are_protocol_compatible(key_file: Path) -> N
     )
     assert result["result"]["isError"] is True
     assert json.loads(result["result"]["content"][0]["text"])["code"] == "invalid_scope"
+
+
+def test_search_memories_schema_exposes_max_chars(key_file: Path) -> None:
+    bridge = Mem0Bridge(api_key_file=key_file)
+    listed = bridge.handle_jsonrpc({"jsonrpc": "2.0", "id": 7, "method": "tools/list", "params": {}})
+    search_schema = next(tool for tool in listed["result"]["tools"] if tool["name"] == "search_memories")
+    assert "max_chars" in search_schema["inputSchema"]["properties"]
+
+
+@pytest.mark.parametrize("bad", [True, 0, -1, 16385, "12"])
+def test_search_rejects_invalid_max_chars(key_file: Path, scope: dict[str, str], bad: object) -> None:
+    bridge = Mem0Bridge(api_key_file=key_file)
+    with pytest.raises(BridgeError) as excinfo:
+        bridge.call_tool("search_memories", {**scope, "query": "q", "max_chars": bad})
+    assert excinfo.value.code == "invalid_argument"
+
+
+def test_search_enforces_cumulative_budget_with_disclosure(fake_server_bridge, scope: dict[str, str]) -> None:
+    bridge, state = fake_server_bridge
+    long_text = "x" * 300
+    short_text = "y" * 50
+    for content in (long_text, short_text):
+        bridge.call_tool("add_memory", {**scope, "content": content})
+
+    result = bridge.call_tool("search_memories", {**scope, "query": "budget", "max_chars": 100})
+
+    texts = [row["memory"] for row in result["results"]]
+    assert long_text not in texts  # over-budget row omitted whole, never truncated
+    assert short_text in texts  # lower-ranked shorter row still admitted
+    assert result["omitted_for_budget"] == 1
+    search_bodies = [request["body"] for request in state.requests if request["path"] == "/search"]
+    assert all("max_chars" not in body for body in search_bodies)  # never forwarded to REST
+
+
+def test_search_default_budget_returns_no_disclosure_when_nothing_omitted(
+    fake_server_bridge, scope: dict[str, str]
+) -> None:
+    bridge, _state = fake_server_bridge
+    bridge.call_tool("add_memory", {**scope, "content": "small"})
+    result = bridge.call_tool("search_memories", {**scope, "query": "small"})
+    assert "omitted_for_budget" not in result
+
+
+def test_query_length_limit_enforced(key_file: Path, scope: dict[str, str]) -> None:
+    bridge = Mem0Bridge(api_key_file=key_file)
+    with pytest.raises(BridgeError) as excinfo:
+        bridge.call_tool("search_memories", {**scope, "query": "q" * 4097})
+    assert excinfo.value.code == "invalid_argument"
+
+
+@pytest.mark.parametrize("bad_top_k", [0, 101, True])
+def test_search_top_k_bounds_enforced(key_file: Path, scope: dict[str, str], bad_top_k: object) -> None:
+    bridge = Mem0Bridge(api_key_file=key_file)
+    with pytest.raises(BridgeError) as excinfo:
+        bridge.call_tool("search_memories", {**scope, "query": "q", "top_k": bad_top_k})
+    assert excinfo.value.code == "invalid_argument"
