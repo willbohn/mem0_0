@@ -1,6 +1,6 @@
 # mem0_0 State-Aware Implementation Handover
 
-Last refreshed: 2026-08-06 16:08 JST
+Last refreshed: 2026-08-07 13:30 JST
 
 This handover is for the next agent continuing the state-aware lifecycle, benchmark, and local deployment work in `/home/will/Documents/CodingWorkspaces/mem0_0`. Treat it as a checkpoint, not as authority over the current repository or runtime: re-run the content-free checks below before changing anything.
 
@@ -19,9 +19,9 @@ This handover is for the next agent continuing the state-aware lifecycle, benchm
 - Implementation candidate: `75021d0a616e7939eb58086f7a46c9dd86433a6b`
 - Candidate source-tree SHA-256: `33fb027e79dd8335ebeb01b90d6c655f2941f0bff75ff757caef62b57851832c`
 - Base branch at the checkpoint: local `main` at `50bdaaea`, tracking `origin/main`
-- The feature branch contains 29 implementation commits beyond that base and has no configured upstream.
-- Remote fork: `origin` (`willbohn/mem0_0`); upstream project: `upstream` (`mem0ai/mem0`).
-- The final candidate SHA has not been pushed. Earlier push authorization referred to an older SHA, so obtain renewed approval for the exact revision being pushed. Never force-push.
+- The feature branch contains 29 implementation commits beyond that base and now tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the implementation candidate, is pushed; the branch is ahead of origin only by documentation-only commits (design `461d4822`, design amendment `94bd26c3`, and this handover refresh) and behind by 0.
+- Remote fork: `origin` (`willbohn/mem0_0`); upstream project: `upstream` (`mem0ai/mem0`). The upstream comparison revision pinned by the stabilization design is `mem0ai/mem0` `main` at `4a0a9a92`.
+- Do not push without new explicit approval for the exact revision being pushed. Never force-push.
 
 The handover documentation commit, if present above the implementation candidate, is documentation-only. The currently running shadow image is intentionally attested to the implementation candidate, not to a later documentation-only commit.
 
@@ -199,6 +199,46 @@ REDIS_HOST=127.0.0.1 REDIS_PORT=16379 uvx hatch run dev_py_3_12:test
 
 The full suite requires a Redis Stack fixture at the stated port. Do not leave a temporary fixture running after verification.
 
+## Design review and amendment checkpoint (2026-08-07)
+
+Purpose: independent adversarial review of
+`docs/superpowers/specs/2026-08-07-mem0-0-stabilization-and-omp-design.md`,
+followed by an approved amendment. No implementation code changed.
+
+- Checkout state after this checkpoint: documentation-only commits above the
+  unchanged implementation candidate `75021d0a` — design `461d4822`, amendment
+  `94bd26c3`, then this handover refresh.
+- Running shadow candidate and source digest: unchanged (`75021d0a`,
+  `33fb027e...`), re-attested via container labels on 2026-08-07.
+- Content-free checks re-run on 2026-08-07: readiness `ready` on all four
+  checks, and receipt reconciliation `reconciled` with row counts and digests
+  identical to the values recorded above. Legacy container running and
+  healthy.
+- Review method: ten read-only reviewers (six repository verification, two
+  primary-source, two adversarial critics). Twelve gaps confirmed (ten
+  reproduced locally), nine proposed items found already implemented and
+  removed from scope, and one new TypeScript filters-only orphan-write defect
+  added to scope. All cited Mem0 and Oh My Pi sources were verified; none of
+  the upstream fix pull requests is merged, so every port is a local
+  implementation.
+- Approved amendment decisions: bridge-side `max_chars` with a 16,384 default
+  and omission disclosure; a typed extraction-parse error plus skipped-item
+  disclosure; per-layer identity policy (SDK strips with warning, bridge
+  rejects); lemmatization behavior changes deferred to a separate design;
+  `project_id=mem0_0` constant and `agent_id=omp` policy; per-operation
+  fail-closed definitions for the OMP gate; and a personal-suite wall-clock
+  cap with budget allocation.
+- The worktree was clean before and after; no unrelated paths were touched.
+  The only side effect outside commits was refreshing `upstream/*`
+  remote-tracking refs during the read-only comparison fetch.
+- Runtime, deployment, installed harnesses, CI/CD, and production state are
+  all unchanged.
+- Remaining gates are unchanged: official benchmark deferred, cutover
+  blocked, OMP validation blocked on installation.
+- Next bounded task: write and commit the regression-first implementation
+  plan for the amended design, then obtain plan approval before modifying
+  implementation code.
+
 ## Benchmark status and hard gate
 
 The implementation and bounded local smokes pass, but the official acceptance benchmark has not run. Do not claim benchmark acceptance or perform cutover.
@@ -227,12 +267,13 @@ Acceptance still requires:
 ## Recommended continuation order
 
 1. Re-attest Git and runtime state using the content-free commands above.
-2. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
-3. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
-4. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
-5. Run the full Python, server, deployment, and TypeScript suites again, then use fresh verifier and critic agents.
-6. Obtain approval for the exact final SHA and push the feature branch without force.
-7. Only after all gates pass, take a new quiesced encrypted snapshot, reconcile it, exercise the cutover recorder and rollback drill, retarget backed-up harness configs atomically, and disable but retain the old unit.
+2. Execute the approved 2026-08-07 stabilization design: write and commit the regression-first implementation plan, obtain approval, then implement and verify one bounded workstream at a time, including the bounded personal local acceptance suite.
+3. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
+4. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
+5. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
+6. Run the full Python, server, deployment, and TypeScript suites again, then use fresh verifier and critic agents.
+7. Obtain approval for the exact final SHA and push the feature branch without force.
+8. Only after all gates pass, take a new quiesced encrypted snapshot, reconcile it, exercise the cutover recorder and rollback drill, retarget backed-up harness configs atomically, and disable but retain the old unit.
 
 ## Commands that remain intentionally blocked
 
@@ -247,6 +288,7 @@ Do not manufacture a cutover record or bypass those gates. Production-port chang
 ## Key documentation
 
 - `docs/designs/mem0-0-state-aware-rollout.md` — approved rollout plan and invariants
+- `docs/superpowers/specs/2026-08-07-mem0-0-stabilization-and-omp-design.md` — approved and amended stabilization and OMP compatibility design
 - `deployment/mem0_0_arch/README.md` — migration, readiness, live verification, cutover, and rollback runbook
 - `evaluation_overlay/README.md` — benchmark overlay and provenance rules
 - `docs/open-source/configuration.mdx` — state-aware and legacy configuration
