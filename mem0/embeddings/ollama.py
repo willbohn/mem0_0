@@ -4,7 +4,7 @@ from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.embeddings.base import EmbeddingBase
 
 try:
-    from ollama import Client  # type: ignore[import, import-not-found]
+    from ollama import Client
 except ImportError:
     raise ImportError("The 'ollama' library is required. Please install it using 'pip install ollama'.")
 
