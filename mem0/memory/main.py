@@ -1975,8 +1975,6 @@ class Memory(MemoryBase):
 
         # Validate search parameters (before applying defaults)
         _validate_search_params(threshold=threshold, top_k=top_k, max_chars=max_chars)
-        if top_k == 0:
-            return {"results": []}
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
@@ -1999,6 +1997,8 @@ class Memory(MemoryBase):
                 "filters must contain at least one of: user_id, agent_id, run_id. "
                 "Example: filters={'user_id': 'u1'}"
             )
+        if top_k == 0:
+            return {"results": []}
 
         limit = top_k
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)
@@ -4195,8 +4195,6 @@ class AsyncMemory(MemoryBase):
 
         # Validate search parameters (before applying defaults)
         _validate_search_params(threshold=threshold, top_k=top_k, max_chars=max_chars)
-        if top_k == 0:
-            return {"results": []}
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
@@ -4221,6 +4219,8 @@ class AsyncMemory(MemoryBase):
                 "filters must contain at least one of: user_id, agent_id, run_id. "
                 "Example: filters={'user_id': 'u1'}"
             )
+        if top_k == 0:
+            return {"results": []}
 
         limit = top_k
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)

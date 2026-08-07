@@ -1580,6 +1580,29 @@ async def test_async_search_top_k_zero_returns_zero_rows(monkeypatch):
     memory.embedding_model.embed.assert_not_called()
 
 
+def test_search_top_k_zero_without_filters_still_raises(monkeypatch):
+    """Regression: top_k=0 must not bypass the filters guard (search() vs get_all() parity)."""
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    with pytest.raises(ValueError, match="filters must contain at least one of"):
+        memory.search("query", top_k=0)
+    memory.embedding_model.embed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_search_top_k_zero_without_filters_still_raises(monkeypatch):
+    """Async counterpart: top_k=0 must not bypass the filters guard."""
+    memory = make_memory([], memory_class=AsyncMemory)
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice_async", AsyncMock())
+
+    with pytest.raises(ValueError, match="filters must contain at least one of"):
+        await memory.search("query", top_k=0)
+    memory.embedding_model.embed.assert_not_called()
+
+
 def test_invalid_message_warning_does_not_log_bodies(monkeypatch, caplog):
     memory = make_memory([])
     monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
