@@ -38,9 +38,16 @@ CONTENT_FIXTURES = (
 class FakeProviderAPI:
     """Minimal callable opener stubbing the five provider-flow REST calls."""
 
-    def __init__(self, *, break_supersession: bool = False, ignore_deletes: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        break_supersession: bool = False,
+        ignore_deletes: bool = False,
+        blank_dispute: bool = False,
+    ) -> None:
         self.break_supersession = break_supersession
         self.ignore_deletes = ignore_deletes
+        self.blank_dispute = blank_dispute
         self.requests: list[tuple] = []
         self.records: dict[str, dict] = {}
         self.scope: dict[str, str] | None = None
@@ -99,7 +106,7 @@ class FakeProviderAPI:
         if query == "What is the current beverage preference?":
             return rows_with("oolong")[:1]
         if query == "What is the current snack preference?":
-            return rows_with("Snack preference")
+            return [] if self.blank_dispute else rows_with("Snack preference")
         if query == "What is the current tea preference?":
             return rows_with("reverted to genmaicha")
         if query == "What are the current notification-related records?":
@@ -188,6 +195,60 @@ def test_provider_flows_fail_closed_when_supersession_search_returns_the_superse
     assert report["counts"]["cleanup_discovered"] == 2
     assert report["counts"]["cleanup_deleted"] == 2
     assert ledger.snapshot()["mutations"] == 4  # 2 infer writes + 2 deletes
+
+
+def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_results(
+    key_file: Path, monkeypatch
+) -> None:
+    """Regression guard: a fake that drops both dispute memories must not pass vacuously.
+
+    ``len(current_rows) != 1`` was true for 0 rows too, so a regression that
+    silently lost both conflicting memories still reported ``dispute_live_ok``
+    True. This pins the fixed contract: exactly the two conflicting facts,
+    never fewer.
+    """
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    ledger = BudgetLedger()
+    ledger.start_provider_clock(now=0.0)
+    api = FakeProviderAPI(blank_dispute=True)
+
+    report = AcceptanceFlows(ledger=ledger, clock=lambda: 1.0, api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["supersession_live_ok"] is True
+    assert report["checks"]["corroboration_live_ok"] is True
+    assert report["checks"]["dispute_live_ok"] is False
+    # Nothing after the raising family ran.
+    assert report["checks"]["reversion_live_ok"] is False
+    assert report["checks"]["direct_vs_lifecycle_live_ok"] is False
+    assert report["checks"]["cleanup_complete"] is True
+
+
+def test_provider_flows_cleanup_delete_charging_never_breaks_report_delivery_under_a_tiny_budget(
+    key_file: Path, monkeypatch
+) -> None:
+    """A near-exhausted mutation budget must degrade gracefully, not crash run().
+
+    ``_cleanup``'s post-hoc ``record_mutation("delete")`` loop runs inside
+    ``run()``'s ``finally`` block, outside the try/except that guards
+    ``_run_flow``. If that loop let ``BudgetExceeded`` escape, run() would
+    raise instead of returning a report even though the real (fake) DELETE
+    requests already succeeded. The tiny budget here is exhausted by writes
+    alone, so every delete-charge attempt must be swallowed.
+    """
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    ledger = BudgetLedger(max_mutations=3, max_infer_writes=48)
+    ledger.start_provider_clock(now=0.0)
+    api = FakeProviderAPI()
+
+    report = AcceptanceFlows(ledger=ledger, clock=lambda: 1.0, api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert isinstance(report, dict)
+    assert report["ok"] is False
+    assert report["checks"]["cleanup_complete"] is True
+    assert report["counts"]["cleanup_deleted"] >= 1
+    # The 3-mutation budget is fully consumed by writes; no delete charges fit.
+    assert ledger.snapshot()["mutations"] == 3
 
 
 def test_provider_flows_fail_the_run_without_extending_past_the_wall_clock_cap(key_file: Path, monkeypatch) -> None:

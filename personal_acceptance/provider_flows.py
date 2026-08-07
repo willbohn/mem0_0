@@ -16,11 +16,18 @@ from collections.abc import Callable
 from typing import Any
 
 from deployment.mem0_0_arch.live_verify import MAX_SCOPE_RESULTS, LiveVerifier, VerificationError
-from personal_acceptance.budget import BudgetLedger
+from personal_acceptance.budget import BudgetExceeded, BudgetLedger
 
 
 class AcceptanceFlows(LiveVerifier):
-    """Run the five provider-tier families inside one disposable REST scope."""
+    """Run the five provider-tier families inside one disposable REST scope.
+
+    Callers own the ledger's wall-clock gate: construct with a ``ledger`` that
+    has already had ``start_provider_clock(...)`` called on it (matching how
+    ``register_family`` is caller-owned elsewhere in the suite). Without that
+    call, ``check_provider_clock`` is a documented no-op and the wall-clock
+    cap silently never fires during this flow's writes.
+    """
 
     def __init__(
         self,
@@ -127,14 +134,16 @@ class AcceptanceFlows(LiveVerifier):
         self._infer_add("Snack preference is castella.", created_at="2025-03-02T00:00:00Z")
 
         current_rows = self._search("What is the current snack preference?")
-        not_single_canonical = len(current_rows) != 1
+        # Both conflicting facts must come back -- not zero (a dropped-memory
+        # regression) and not one (a wrongly-collapsed canonical answer).
+        both_conflicting_present = len(current_rows) == 2
 
         audit = self._request(
             "POST", "/memories/audit", body={"filters": dict(self.scope), "limit": MAX_SCOPE_RESULTS}
         )
         audit_completed = isinstance(audit, dict) and isinstance(audit.get("scanned"), int)
 
-        self.report["checks"]["dispute_live_ok"] = not_single_canonical and audit_completed
+        self.report["checks"]["dispute_live_ok"] = both_conflicting_present and audit_completed
         if not self.report["checks"]["dispute_live_ok"]:
             raise VerificationError("dispute recall did not satisfy the synthetic assertion")
 
@@ -175,6 +184,13 @@ class AcceptanceFlows(LiveVerifier):
         super()._cleanup()
         # Deletes are charged to the ledger AFTER the fact, from the parent's
         # already-drained count -- the data-plane cleanup above is unconditional
-        # and must never be gated by ledger bookkeeping.
+        # and must never be gated by ledger bookkeeping. If the mutation budget
+        # is (nearly) exhausted, stop charging rather than let BudgetExceeded
+        # escape run()'s finally block and swallow an already-completed
+        # cleanup and its report: the ledger snapshot then tells the true
+        # story (fewer recorded deletes than cleanup_deleted).
         for _ in range(self.report["counts"]["cleanup_deleted"]):
-            self.ledger.record_mutation("delete")
+            try:
+                self.ledger.record_mutation("delete")
+            except BudgetExceeded:
+                break
