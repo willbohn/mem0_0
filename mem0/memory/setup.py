@@ -7,12 +7,15 @@ from hashlib import sha256
 
 from mem0.utils.paths import resolve_mem0_dir
 
+_logger = logging.getLogger(__name__)
+
 # Set up the directory path
 VECTOR_ID = str(uuid.uuid4())
 mem0_dir = str(resolve_mem0_dir())
-os.makedirs(mem0_dir, exist_ok=True)
-
-_logger = logging.getLogger(__name__)
+try:
+    os.makedirs(mem0_dir, exist_ok=True)
+except OSError as error:
+    _logger.debug("Could not create mem0 dir %s at import: %s", mem0_dir, error)
 
 
 def _config_path():
