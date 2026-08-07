@@ -21,14 +21,16 @@ def mock_fastembed_client():
 def test_embed_with_jina_model(mock_fastembed_client):
     config = BaseEmbedderConfig(model="jinaai/jina-embeddings-v2-base-en", embedding_dims=768)
     embedder = FastEmbedEmbedding(config)
-    
+
     mock_embedding = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
     mock_fastembed_client.embed.return_value = iter([mock_embedding])
-    
+
     text = "Sample text to embed."
     embedding = embedder.embed(text)
-    
+
     mock_fastembed_client.embed.assert_called_once_with(text)
+    assert isinstance(embedding, list)
+    assert all(isinstance(value, float) for value in embedding)
     assert list(embedding) == [0.1, 0.2, 0.3, 0.4, 0.5]
 
 
