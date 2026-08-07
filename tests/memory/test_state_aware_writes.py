@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mem0.configs.base import MemoryConfig
-from mem0.exceptions import EmbeddingError, MemoryPersistenceError
+from mem0.exceptions import EmbeddingError, ExtractionParseError, MemoryPersistenceError
 from mem0.memory.main import AsyncMemory, Memory
 from mem0.vector_stores.pinecone import PineconeDB
 from mem0.vector_stores.qdrant import Qdrant
@@ -1467,3 +1467,72 @@ def test_add_kwarg_identity_still_wins_over_metadata(monkeypatch):
 
     payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
     assert payload["user_id"] == "real"
+
+
+@pytest.mark.parametrize("raw", ['"bare string"', "[1, 2]", "42", "null"])
+def test_state_aware_add_raises_typed_error_for_non_object_response(raw):
+    memory = make_memory([])
+    memory.llm.generate_response.return_value = raw
+    with pytest.raises(ExtractionParseError):
+        memory._add_to_vector_store(
+            [{"role": "user", "content": "hello"}], {"user_id": "u1"}, {"user_id": "u1"}, infer=True
+        )
+    memory.vector_store.insert.assert_not_called()
+
+
+@pytest.mark.parametrize("field", ['"bare string"', "42", "null", '{"a": 1}'])
+def test_state_aware_add_raises_typed_error_for_non_list_memory_field(field):
+    memory = make_memory([])
+    memory.llm.generate_response.return_value = '{"memory": %s}' % field
+    with pytest.raises(ExtractionParseError):
+        memory._add_to_vector_store(
+            [{"role": "user", "content": "hello"}], {"user_id": "u1"}, {"user_id": "u1"}, infer=True
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_state_aware_add_raises_typed_error_for_malformed_response():
+    memory = make_memory([], memory_class=AsyncMemory)
+    memory.llm.generate_response.return_value = '{"memory": "bare string"}'
+    with pytest.raises(ExtractionParseError):
+        await memory._add_to_vector_store(
+            [{"role": "user", "content": "hello"}], {"user_id": "u1"}, {"user_id": "u1"}, infer=True
+        )
+
+
+def test_add_discloses_skipped_invalid_extraction_items(monkeypatch):
+    memory = make_memory([])
+    valid = extraction("User lives in Tokyo", "Tokyo")
+    memory.llm.generate_response.return_value = json.dumps({"memory": ["bare", 42, None, valid]})
+    memory.embedding_model.embed_batch.return_value = [[0.1, 0.2]]
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    response = memory.add([{"role": "user", "content": "I moved to Tokyo"}], user_id="u1")
+
+    assert response["skipped_invalid_extractions"] == 3
+    assert len(response["results"]) == 1
+
+
+def test_add_all_invalid_items_returns_empty_with_disclosure(monkeypatch):
+    memory = make_memory([])
+    memory.llm.generate_response.return_value = json.dumps({"memory": ["bare", 42]})
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    response = memory.add([{"role": "user", "content": "hello"}], user_id="u1")
+
+    assert response["results"] == []
+    assert response["skipped_invalid_extractions"] == 2
+    memory.db.save_messages.assert_called_once()
+
+
+def test_add_valid_empty_extraction_has_no_disclosure_field(monkeypatch):
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    response = memory.add([{"role": "user", "content": "hello"}], user_id="u1")
+
+    assert response["results"] == []
+    assert "skipped_invalid_extractions" not in response

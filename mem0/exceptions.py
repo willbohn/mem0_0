@@ -370,10 +370,26 @@ class LLMError(MemoryError):
             suggestion="Please check your LLM configuration and API key"
         )
     """
-    def __init__(self, message: str, error_code: str = "LLM_001", details: dict = None, 
-                 suggestion: str = "Please check your LLM configuration and API key", 
+    def __init__(self, message: str, error_code: str = "LLM_001", details: dict = None,
+                 suggestion: str = "Please check your LLM configuration and API key",
                  debug_info: dict = None):
         super().__init__(message, error_code, details, suggestion, debug_info)
+
+
+class ExtractionParseError(MemoryError):
+    """Raised when an extraction LLM response cannot be parsed into the expected shape.
+
+    Distinct from LLMError: the provider responded, but the response was not a
+    JSON object with a list-valued "memory" field.
+    """
+
+    def __init__(self, message: str, details: dict = None):
+        super().__init__(
+            message=message,
+            error_code="EXTRACT_001",
+            details=details,
+            suggestion="Check the configured extraction model's JSON output quality",
+        )
 
 
 class DatabaseError(MemoryError):

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 
 from mem0.configs.base import MemoryConfig, RecallConfig
-from mem0.exceptions import LLMError, MemoryPersistenceError
+from mem0.exceptions import ExtractionParseError, LLMError, MemoryPersistenceError
 from mem0.memory.main import AsyncMemory, Memory
 
 
@@ -49,22 +49,20 @@ class TestAddToVectorStoreErrors:
 
         return memory
 
-    def test_empty_llm_response_fact_extraction(self, mocker, mock_memory, caplog):
+    def test_empty_llm_response_fact_extraction(self, mocker, mock_memory):
         """Test invalid JSON response from LLM during extraction"""
         # Setup
         mock_memory.llm.generate_response.return_value = "invalid json"
         mocker.patch("mem0.memory.main.capture_event")
 
-        # Execute
-        with caplog.at_level(logging.ERROR):
-            result = mock_memory._add_to_vector_store(
+        # Execute — v3 single-pass pipeline makes 1 LLM call, raises a typed
+        # error on an unparsable response instead of silently returning [].
+        with pytest.raises(ExtractionParseError):
+            mock_memory._add_to_vector_store(
                 messages=[{"role": "user", "content": "test"}], metadata={}, filters={}, infer=True
             )
 
-        # Verify — v3 single-pass pipeline makes 1 LLM call, returns [] on parse error
         assert mock_memory.llm.generate_response.call_count == 1
-        assert result == []
-        assert any("Error parsing extraction response" in record.message for record in caplog.records), "Expected error message not found in logs"
 
     def test_empty_llm_response_memory_actions(self, mock_memory, caplog):
         """Test empty response from LLM during memory actions (v3: single-pass, 1 LLM call)"""
@@ -261,19 +259,19 @@ class TestAsyncAddToVectorStoreErrors:
         return memory
 
     @pytest.mark.asyncio
-    async def test_async_empty_llm_response_fact_extraction(self, mock_async_memory, caplog, mocker):
+    async def test_async_empty_llm_response_fact_extraction(self, mock_async_memory, mocker):
         """Test invalid JSON response from LLM during extraction (async)"""
         mocker.patch("mem0.utils.factory.EmbedderFactory.create", return_value=MagicMock())
         mock_async_memory.llm.generate_response.return_value = "invalid json"
         mocker.patch("mem0.memory.main.capture_event")
 
-        with caplog.at_level(logging.ERROR):
-            result = await mock_async_memory._add_to_vector_store(
+        # Raises a typed error on an unparsable response instead of silently
+        # returning [].
+        with pytest.raises(ExtractionParseError):
+            await mock_async_memory._add_to_vector_store(
                 messages=[{"role": "user", "content": "test"}], metadata={}, effective_filters={}, infer=True
             )
         assert mock_async_memory.llm.generate_response.call_count == 1
-        assert result == []
-        assert any("Error parsing extraction response" in record.message for record in caplog.records), "Expected error message not found in logs"
 
     @pytest.mark.asyncio
     async def test_async_empty_llm_response_memory_actions(self, mock_async_memory, caplog, mocker):

@@ -8,6 +8,7 @@ import os
 import time
 import uuid
 import warnings
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Optional
@@ -23,7 +24,7 @@ from mem0.configs.prompts import (
     PROCEDURAL_MEMORY_SYSTEM_PROMPT,
     generate_additive_extraction_prompt,
 )
-from mem0.exceptions import EmbeddingError, LLMError, MemoryPersistenceError
+from mem0.exceptions import EmbeddingError, ExtractionParseError, LLMError, MemoryPersistenceError
 from mem0.exceptions import ValidationError as Mem0ValidationError
 from mem0.memory.base import MemoryBase
 from mem0.memory.lifecycle import (
@@ -223,6 +224,37 @@ def _validate_and_trim_entity_id(value: Optional[Any], name: str) -> Optional[st
             f"Invalid {name}: cannot contain whitespace. Provide a valid identifier without spaces."
         )
     return trimmed
+
+
+def _parse_extraction_response(raw_response: str) -> list:
+    """Decode an extraction response and validate its shape.
+
+    Returns the list under the "memory" key (empty when the response is blank
+    or the key is absent). Raises ExtractionParseError when the response is
+    undecodable, its top level is not a JSON object, or "memory" is not a list.
+    """
+    cleaned = remove_code_blocks(raw_response)
+    if not cleaned or not cleaned.strip():
+        return []
+    try:
+        decoded = json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        try:
+            decoded = json.loads(extract_json(cleaned), strict=False)
+        except Exception as error:
+            raise ExtractionParseError(f"extraction response is not valid JSON: {error}") from error
+    if not isinstance(decoded, dict):
+        raise ExtractionParseError(
+            f"extraction response top level is {type(decoded).__name__}, expected a JSON object"
+        )
+    if "memory" not in decoded:
+        return []
+    memory_field = decoded["memory"]
+    if not isinstance(memory_field, list):
+        raise ExtractionParseError(
+            f"extraction 'memory' field is {type(memory_field).__name__}, expected a list"
+        )
+    return memory_field
 
 
 def _validate_search_params(
@@ -1090,7 +1122,10 @@ class Memory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
+        stats: Dict[str, Any] = {}
+        vector_store_result = self._add_to_vector_store(
+            messages, processed_metadata, effective_filters, infer, prompt=prompt, stats=stats
+        )
         scale_threshold_notice = detect_scale_threshold_from_add_result(self, vector_store_result)
         if temporal_usage_notice:
             display_temporal_usage_notice(self, "sync", "add", *temporal_usage_notice)
@@ -1098,9 +1133,12 @@ class Memory(MemoryBase):
             display_scale_threshold_notice(self, "sync", "add", *scale_threshold_notice)
         else:
             display_first_run_notice(self, "sync", "add")
-        return {"results": vector_store_result}
+        response = {"results": vector_store_result}
+        if stats.get("skipped_invalid_extractions"):
+            response["skipped_invalid_extractions"] = stats["skipped_invalid_extractions"]
+        return response
 
-    def _add_to_vector_store(self, messages, metadata, filters, infer, prompt=None):
+    def _add_to_vector_store(self, messages, metadata, filters, infer, prompt=None, stats: Optional[Dict[str, Any]] = None):
         if not infer:
             prepared = []
             for message_index, message_dict in enumerate(messages):
@@ -1267,25 +1305,24 @@ class Memory(MemoryBase):
             raise LLMError(f"LLM extraction failed: {e}") from e
 
         # Parse response
-        try:
-            response = remove_code_blocks(response)
-            if not response or not response.strip():
-                extracted_memories = []
-            else:
-                try:
-                    extracted_memories = json.loads(response, strict=False).get("memory", [])
-                except json.JSONDecodeError:
-                    extracted_json = extract_json(response)
-                    extracted_memories = json.loads(extracted_json, strict=False).get("memory", [])
-        except Exception as e:
-            logger.error(f"Error parsing extraction response: {e}")
-            extracted_memories = []
+        extracted_memories = _parse_extraction_response(response)
 
         grounded_memories = []
+        skipped_invalid = 0
         for extracted in extracted_memories:
+            if not isinstance(extracted, Mapping):
+                skipped_invalid += 1
+                logger.warning("Skipping non-mapping extraction item of type %s", type(extracted).__name__)
+                continue
+            text_value = extracted.get("text")
+            if not isinstance(text_value, str) or not text_value.strip():
+                skipped_invalid += 1
+                logger.warning("Skipping extraction item with missing or empty text")
+                continue
             try:
                 lifecycle_metadata = build_lifecycle_metadata(extracted, messages)
             except ValueError as error:
+                skipped_invalid += 1
                 logger.warning("Skipping ungrounded memory extraction: %s", error)
                 continue
             related = lifecycle_metadata.get("_mem0_related_to", [])
@@ -1294,6 +1331,8 @@ class Memory(MemoryBase):
             ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
+        if stats is not None and skipped_invalid:
+            stats["skipped_invalid_extractions"] = skipped_invalid
 
         if not extracted_memories:
             # Save messages even if nothing extracted
@@ -3247,7 +3286,10 @@ class AsyncMemory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
-        vector_store_result = await self._add_to_vector_store(messages, processed_metadata, effective_filters, infer, prompt=prompt)
+        stats: Dict[str, Any] = {}
+        vector_store_result = await self._add_to_vector_store(
+            messages, processed_metadata, effective_filters, infer, prompt=prompt, stats=stats
+        )
         scale_threshold_notice = await asyncio.to_thread(detect_scale_threshold_from_add_result, self, vector_store_result)
         if temporal_usage_notice:
             await display_temporal_usage_notice_async(self, "async", "add", *temporal_usage_notice)
@@ -3255,7 +3297,10 @@ class AsyncMemory(MemoryBase):
             await display_scale_threshold_notice_async(self, "async", "add", *scale_threshold_notice)
         else:
             await display_first_run_notice_async(self, "async", "add")
-        return {"results": vector_store_result}
+        response = {"results": vector_store_result}
+        if stats.get("skipped_invalid_extractions"):
+            response["skipped_invalid_extractions"] = stats["skipped_invalid_extractions"]
+        return response
 
     async def _add_to_vector_store(
         self,
@@ -3264,6 +3309,7 @@ class AsyncMemory(MemoryBase):
         effective_filters: dict,
         infer: bool,
         prompt: Optional[str] = None,
+        stats: Optional[Dict[str, Any]] = None,
     ):
         if not infer:
             prepared = []
@@ -3435,25 +3481,24 @@ class AsyncMemory(MemoryBase):
             raise LLMError(f"LLM extraction failed: {e}") from e
 
         # Parse response
-        try:
-            response = remove_code_blocks(response)
-            if not response or not response.strip():
-                extracted_memories = []
-            else:
-                try:
-                    extracted_memories = json.loads(response, strict=False).get("memory", [])
-                except json.JSONDecodeError:
-                    extracted_json = extract_json(response)
-                    extracted_memories = json.loads(extracted_json, strict=False).get("memory", [])
-        except Exception as e:
-            logger.error(f"Error parsing extraction response (async): {e}")
-            extracted_memories = []
+        extracted_memories = _parse_extraction_response(response)
 
         grounded_memories = []
+        skipped_invalid = 0
         for extracted in extracted_memories:
+            if not isinstance(extracted, Mapping):
+                skipped_invalid += 1
+                logger.warning("Skipping non-mapping extraction item of type %s (async)", type(extracted).__name__)
+                continue
+            text_value = extracted.get("text")
+            if not isinstance(text_value, str) or not text_value.strip():
+                skipped_invalid += 1
+                logger.warning("Skipping extraction item with missing or empty text (async)")
+                continue
             try:
                 lifecycle_metadata = build_lifecycle_metadata(extracted, messages)
             except ValueError as error:
+                skipped_invalid += 1
                 logger.warning("Skipping ungrounded memory extraction (async): %s", error)
                 continue
             related = lifecycle_metadata.get("_mem0_related_to", [])
@@ -3462,6 +3507,8 @@ class AsyncMemory(MemoryBase):
             ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
+        if stats is not None and skipped_invalid:
+            stats["skipped_invalid_extractions"] = skipped_invalid
 
         if not extracted_memories:
             await asyncio.to_thread(self.db.save_messages, eligible_messages, session_scope)
