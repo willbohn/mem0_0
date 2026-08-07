@@ -1536,3 +1536,45 @@ def test_add_valid_empty_extraction_has_no_disclosure_field(monkeypatch):
 
     assert response["results"] == []
     assert "skipped_invalid_extractions" not in response
+
+
+def test_get_all_top_k_zero_returns_zero_rows(monkeypatch):
+    memory = make_memory([])
+    row = SimpleNamespace(id="m1", payload={"data": "x", "user_id": "u1"})
+    memory.vector_store.list = MagicMock(return_value=([row], None))
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    assert memory.get_all(filters={"user_id": "u1"}, top_k=0) == {"results": []}
+    memory.vector_store.list.assert_not_called()
+
+
+def test_search_top_k_zero_returns_zero_rows(monkeypatch):
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    assert memory.search("query", filters={"user_id": "u1"}, top_k=0) == {"results": []}
+    memory.embedding_model.embed.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_get_all_top_k_zero_returns_zero_rows(monkeypatch):
+    memory = make_memory([], memory_class=AsyncMemory)
+    row = SimpleNamespace(id="m1", payload={"data": "x", "user_id": "u1"})
+    memory.vector_store.list = MagicMock(return_value=([row], None))
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice_async", AsyncMock())
+
+    assert await memory.get_all(filters={"user_id": "u1"}, top_k=0) == {"results": []}
+    memory.vector_store.list.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_search_top_k_zero_returns_zero_rows(monkeypatch):
+    memory = make_memory([], memory_class=AsyncMemory)
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice_async", AsyncMock())
+
+    assert await memory.search("query", filters={"user_id": "u1"}, top_k=0) == {"results": []}
+    memory.embedding_model.embed.assert_not_called()

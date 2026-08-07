@@ -356,6 +356,9 @@ def reciprocal_rank_fusion(
     explain: bool = False,
 ) -> list[dict[str, Any]]:
     """Union and rank dense, keyword, and entity candidates with weighted RRF."""
+    if top_k is not None and top_k <= 0:
+        return []
+
     candidates: dict[str, dict[str, Any]] = {}
     active_weights = 0.0
     for channel, weight in RRF_WEIGHTS.items():

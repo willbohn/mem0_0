@@ -283,3 +283,20 @@ def test_rrf_explain_records_suppressed_duplicate_on_canonical_result():
     assert ranked[0]["score_details"]["deduplicated_candidates"] == [
         {"id": "duplicate", "reason": "state_key:user::residence"}
     ]
+
+
+def test_rrf_top_k_zero_returns_zero_rows():
+    channels = {
+        "semantic": [
+            result("current", "Tokyo current", _mem0_state_key="user::residence", _mem0_status="active"),
+        ]
+    }
+
+    ranked = reciprocal_rank_fusion(
+        channels,
+        threshold=0.0,
+        top_k=0,
+        historical=False,
+    )
+
+    assert ranked == []

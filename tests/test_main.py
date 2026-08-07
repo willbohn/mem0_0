@@ -565,14 +565,15 @@ class TestSearchParamValidation:
         assert "results" in result
 
     def test_search_accepts_top_k_zero(self, memory_instance):
-        """Search should accept top_k=0."""
-        mock_memories = []
-        memory_instance.vector_store.search = Mock(return_value=mock_memories)
+        """Search should accept top_k=0 and return zero rows without touching the vector store."""
+        memory_instance.vector_store.search = Mock(
+            return_value=[{"id": "m1", "score": 0.9, "payload": {"data": "x"}}]
+        )
         memory_instance.vector_store.keyword_search = Mock(return_value=None)
         memory_instance.embedding_model.embed = Mock(return_value=[0.1, 0.2, 0.3])
 
-        with patch("mem0.memory.main.lemmatize_for_bm25", return_value="test"), \
-             patch("mem0.memory.main.extract_entities", return_value=[]):
-            result = memory_instance.search("test", filters={"user_id": "test"}, top_k=0)
+        result = memory_instance.search("test", filters={"user_id": "test"}, top_k=0)
 
-        assert "results" in result
+        assert result == {"results": []}
+        memory_instance.embedding_model.embed.assert_not_called()
+        memory_instance.vector_store.search.assert_not_called()

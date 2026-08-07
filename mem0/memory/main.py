@@ -1829,6 +1829,9 @@ class Memory(MemoryBase):
                 "Example: filters={'user_id': 'u1'}"
             )
 
+        if top_k == 0:
+            return {"results": []}
+
         limit = top_k
         fetch_limit = limit if show_expired else max(limit * 4, 60)
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)
@@ -1895,9 +1898,9 @@ class Memory(MemoryBase):
             if additional_metadata:
                 memory_item_dict["metadata"] = additional_metadata
 
-            formatted_memories.append(memory_item_dict)
             if output_limit is not None and len(formatted_memories) >= output_limit:
                 break
+            formatted_memories.append(memory_item_dict)
 
         return formatted_memories
 
@@ -1964,6 +1967,8 @@ class Memory(MemoryBase):
 
         # Validate search parameters (before applying defaults)
         _validate_search_params(threshold=threshold, top_k=top_k, max_chars=max_chars)
+        if top_k == 0:
+            return {"results": []}
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
@@ -4031,6 +4036,9 @@ class AsyncMemory(MemoryBase):
                 "Example: filters={'user_id': 'u1'}"
             )
 
+        if top_k == 0:
+            return {"results": []}
+
         limit = top_k
         fetch_limit = limit if show_expired else max(limit * 4, 60)
         scale_threshold_notice = detect_scale_threshold_from_top_k(top_k)
@@ -4097,9 +4105,9 @@ class AsyncMemory(MemoryBase):
             if additional_metadata:
                 memory_item_dict["metadata"] = additional_metadata
 
-            formatted_memories.append(memory_item_dict)
             if output_limit is not None and len(formatted_memories) >= output_limit:
                 break
+            formatted_memories.append(memory_item_dict)
 
         return formatted_memories
 
@@ -4168,6 +4176,8 @@ class AsyncMemory(MemoryBase):
 
         # Validate search parameters (before applying defaults)
         _validate_search_params(threshold=threshold, top_k=top_k, max_chars=max_chars)
+        if top_k == 0:
+            return {"results": []}
         query = _validate_and_trim_search_query(query)
         temporal_usage_notice = detect_temporal_usage_from_search(query, filters)
 
