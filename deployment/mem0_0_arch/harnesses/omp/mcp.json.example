@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "mem0-local": {
+      "command": "/home/will/Documents/CodingWorkspaces/mem0_0/.venv/bin/python",
+      "args": [
+        "/home/will/Documents/CodingWorkspaces/mem0_0/deployment/mem0_0_arch/bridge/bridge.py"
+      ],
+      "env": {
+        "MEM0_API_URL": "http://127.0.0.1:28889",
+        "MEM0_API_KEY_FILE": "/home/will/.config/mem0_0-arch/bridge-api-key"
+      }
+    }
+  }
+}
