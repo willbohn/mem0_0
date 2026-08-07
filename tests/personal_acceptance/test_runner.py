@@ -19,6 +19,7 @@ import pytest
 
 from deployment.mem0_0_arch.backup_restore import BackupVerificationError
 from deployment.mem0_0_arch.live_verify import REQUIRED_SCOPE
+from deployment.mem0_0_arch.migration import MigrationConflictError
 from personal_acceptance import runner
 from personal_acceptance.budget import BudgetLedger
 from personal_acceptance.families import deterministic_families
@@ -346,3 +347,86 @@ def test_provider_tier_with_reconciled_golden_result_is_ok(monkeypatch, key_file
 
     assert report["checks"]["reconciled"] is True
     assert report["ok"] is True
+
+
+# Bonus: the other reconcile() failure branch (MigrationConflictError), never re-raised.
+def test_reconcile_returns_false_on_migration_conflict_error(tmp_path, monkeypatch):
+    def _raise(*args, **kwargs):
+        raise MigrationConflictError("reconciliation target must be the canonical isolated shadow container")
+
+    monkeypatch.setattr(runner, "reconcile_shadow", _raise)
+
+    assert runner.reconcile(tmp_path / "receipt.json", tmp_path) is False
+
+
+# main()'s happy path: prints valid JSON, exits 0/1 on ok, and --output writes the same JSON to disk.
+# run_deterministic is monkeypatched (rather than routed through a subprocess stub) because main()
+# intentionally has no CLI knob for injecting a custom subprocess runner.
+def test_main_prints_and_writes_the_report_and_exits_zero_when_ok(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        runner,
+        "run_deterministic",
+        lambda families, **kwargs: {
+            "checks": {"stub_family": True},
+            "counts": {"stub_count": 1},
+            "timings_ms": {"stub_ms": 1.0},
+        },
+    )
+    output_path = tmp_path / "report.json"
+
+    exit_code = runner.main(["--tier", "deterministic", "--skip-jest", "--output", str(output_path)])
+
+    assert exit_code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["ok"] is True
+    assert printed["tier"] == "deterministic"
+    assert printed["checks"]["stub_family"] is True
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written == printed
+
+
+def test_main_exits_one_when_a_check_is_false(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        runner,
+        "run_deterministic",
+        lambda families, **kwargs: {"checks": {"stub_family": False}, "counts": {}, "timings_ms": {}},
+    )
+    output_path = tmp_path / "report.json"
+
+    exit_code = runner.main(["--tier", "deterministic", "--skip-jest", "--output", str(output_path)])
+
+    assert exit_code == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["ok"] is False
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written == printed
+
+
+# A failing jest check in the full tier (without --skip-jest) must fail scope_ts specifically and ok overall.
+def test_full_tier_with_a_failing_jest_check_fails_the_run(monkeypatch, key_file, receipt_and_home):
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    receipt, home = receipt_and_home
+    api = FakeProviderAPI()
+    monkeypatch.setattr(runner, "reconcile_shadow", lambda *args, **kwargs: GOLDEN_RECONCILE_RESULT)
+
+    def _run(argv, **kwargs):
+        del kwargs
+        if argv[:2] == ["pnpm", "run"]:
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="16 passed in 1.23s\n", stderr="")
+
+    report = runner.build_report(
+        tier="full",
+        ledger=BudgetLedger(),
+        subprocess_runner=_run,
+        skip_jest=False,
+        receipt=receipt,
+        home=home,
+        clock=lambda: 1.0,
+        provider_kwargs={"api_key_file": key_file, "opener": api, "timeout": 1},
+    )
+
+    assert report["checks"]["scope_ts"] is False
+    assert report["ok"] is False
+    # every other check (deterministic node-based families + provider families + reconciled) still passed
+    assert all(value for key, value in report["checks"].items() if key != "scope_ts")
