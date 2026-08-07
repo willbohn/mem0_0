@@ -38,6 +38,11 @@ OMP session is pending installation.
 
 ## 3. Enumerate discovered servers and disable duplicates by name
 
+The discovery, denylist, and profile-independence behavior described in
+this section is per OMP's current documentation; it is not yet exercised
+against a live install, and remains pending installation like the rest of
+this runbook.
+
 OMP discovers MCP servers from multiple sources, including Claude Code's
 and Codex's own configs, not only from OMP-native `mcp.json` files. Before
 enabling `mem0-local`, enumerate everything OMP currently sees:
