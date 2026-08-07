@@ -284,3 +284,57 @@ async def test_async_get_never_exposes_reserved_lifecycle_metadata():
     result = await memory.get("memory-1")
 
     assert result["metadata"] == {"topic": "profile"}
+
+
+def _raise_not_implemented(_query):
+    raise NotImplementedError("no noun chunks")
+
+
+def test_state_aware_search_survives_entity_extraction_failure(monkeypatch):
+    memory = make_memory()
+    memory.vector_store.search.return_value = []
+    memory.vector_store.keyword_search.return_value = []
+    monkeypatch.setattr("mem0.memory.main.extract_entities", _raise_not_implemented)
+    monkeypatch.setattr("mem0.memory.main.lemmatize_for_bm25", lambda query, **_kwargs: query.casefold())
+
+    results = memory._search_vector_store("query", {"user_id": "u1"}, 10, threshold=0.0)
+
+    assert results == []
+
+
+def test_legacy_search_survives_entity_extraction_failure(monkeypatch):
+    memory = make_memory(mode="legacy")
+    memory.vector_store.search.return_value = []
+    memory.vector_store.keyword_search.return_value = []
+    monkeypatch.setattr("mem0.memory.main.extract_entities", _raise_not_implemented)
+    monkeypatch.setattr("mem0.memory.main.lemmatize_for_bm25", lambda query, **_kwargs: query.casefold())
+
+    results = memory._search_vector_store("query", {"user_id": "u1"}, 10, threshold=0.0)
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_async_state_aware_search_survives_entity_extraction_failure(monkeypatch):
+    memory = make_async_memory()
+    memory.vector_store.search.return_value = []
+    memory.vector_store.keyword_search.return_value = []
+    monkeypatch.setattr("mem0.memory.main.extract_entities", _raise_not_implemented)
+    monkeypatch.setattr("mem0.memory.main.lemmatize_for_bm25", lambda query, **_kwargs: query.casefold())
+
+    results = await memory._search_vector_store("query", {"user_id": "u1"}, 10, threshold=0.0)
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_async_legacy_search_survives_entity_extraction_failure(monkeypatch):
+    memory = make_async_memory(mode="legacy")
+    memory.vector_store.search.return_value = []
+    memory.vector_store.keyword_search.return_value = []
+    monkeypatch.setattr("mem0.memory.main.extract_entities", _raise_not_implemented)
+    monkeypatch.setattr("mem0.memory.main.lemmatize_for_bm25", lambda query, **_kwargs: query.casefold())
+
+    results = await memory._search_vector_store("query", {"user_id": "u1"}, 10, threshold=0.0)
+
+    assert results == []

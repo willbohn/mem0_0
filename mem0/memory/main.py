@@ -2212,7 +2212,11 @@ class Memory(MemoryBase):
             threshold = 0.1
 
         query_lemmatized = lemmatize_for_bm25(query)
-        query_entities = extract_entities(query)
+        try:
+            query_entities = extract_entities(query)
+        except Exception:
+            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+            query_entities = []
         embeddings = self.embedding_model.embed(query, "search")
         internal_limit = max(limit * 4, 60)
 
@@ -2321,7 +2325,11 @@ class Memory(MemoryBase):
 
         # Step 1: Preprocess query
         query_lemmatized = lemmatize_for_bm25(query, unicode_fallback=False)
-        query_entities = extract_entities(query)
+        try:
+            query_entities = extract_entities(query)
+        except Exception:
+            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+            query_entities = []
 
         # Step 2: Embed query
         embeddings = self.embedding_model.embed(query, "search")
@@ -4426,7 +4434,11 @@ class AsyncMemory(MemoryBase):
             threshold = 0.1
 
         query_lemmatized = await asyncio.to_thread(lemmatize_for_bm25, query)
-        query_entities = await asyncio.to_thread(extract_entities, query)
+        try:
+            query_entities = await asyncio.to_thread(extract_entities, query)
+        except Exception:
+            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+            query_entities = []
         embeddings = await asyncio.to_thread(self.embedding_model.embed, query, "search")
         internal_limit = max(limit * 4, 60)
         semantic_results = await asyncio.to_thread(
@@ -4541,7 +4553,11 @@ class AsyncMemory(MemoryBase):
 
         # Step 1: Preprocess query (CPU-bound)
         query_lemmatized = await asyncio.to_thread(lemmatize_for_bm25, query, unicode_fallback=False)
-        query_entities = await asyncio.to_thread(extract_entities, query)
+        try:
+            query_entities = await asyncio.to_thread(extract_entities, query)
+        except Exception:
+            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+            query_entities = []
 
         # Step 2: Embed query
         embeddings = await asyncio.to_thread(self.embedding_model.embed, query, "search")
