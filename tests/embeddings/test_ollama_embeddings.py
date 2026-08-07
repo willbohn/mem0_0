@@ -96,6 +96,16 @@ def test_embed_batch_count_mismatch_raises(mock_ollama_client):
         embedder.embed_batch(["first text", "second text"])
 
 
+def test_default_embedding_dims_match_nomic_embed_text(mock_ollama_client):
+    """Defaults to nomic-embed-text with 768 dims when not specified."""
+    config = BaseEmbedderConfig()
+    embedder = OllamaEmbedding(config)
+
+    mock_ollama_client.list.assert_called()
+    assert embedder.config.model == "nomic-embed-text"
+    assert embedder.config.embedding_dims == 768
+
+
 def test_import_without_ollama_raises_import_error(monkeypatch):
     import builtins
     import importlib
