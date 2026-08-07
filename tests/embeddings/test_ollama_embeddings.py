@@ -113,9 +113,15 @@ def test_import_without_ollama_raises_import_error(monkeypatch):
 
     monkeypatch.setattr(builtins, "input", lambda *_a: pytest.fail("interactive install prompt ran"))
     monkeypatch.setitem(sys.modules, "ollama", None)
+    # Preserve the original module object so other tests that patch
+    # mem0.embeddings.ollama classes keep targeting the module the package
+    # attribute actually references, regardless of test execution order.
+    original = sys.modules.get("mem0.embeddings.ollama")
     sys.modules.pop("mem0.embeddings.ollama", None)
     try:
         with pytest.raises(ImportError, match="ollama"):
             importlib.import_module("mem0.embeddings.ollama")
     finally:
         sys.modules.pop("mem0.embeddings.ollama", None)
+        if original is not None:
+            sys.modules["mem0.embeddings.ollama"] = original

@@ -167,7 +167,7 @@ _IDENTITY_KEYS = ENTITY_PARAMS | {"actor_id"}
 def _strip_identity_keys(
     metadata: Dict[str, Any], existing_payload: Dict[str, Any], context: str = "update()"
 ) -> Dict[str, Any]:
-    """Drop immutable identity and reserved lifecycle fields from caller metadata."""
+    """Drop caller-supplied identity and reserved lifecycle fields from metadata."""
     clean = {}
     for key, value in metadata.items():
         if str(key).startswith("_mem0_"):
@@ -176,7 +176,7 @@ def _strip_identity_keys(
         elif key not in _IDENTITY_KEYS:
             clean[key] = value
         elif value != existing_payload.get(key):
-            logger.warning(f"{context}: ignoring metadata['{key}'] - identity fields are set from parameters")
+            logger.warning(f"{context}: ignoring metadata['{key}'] - identity fields cannot be set via metadata")
     return clean
 
 
@@ -271,7 +271,7 @@ def _validate_search_params(
         top_k: Number of results to return (must be non-negative integer)
 
     Raises:
-        ValueError: If threshold or top_k are invalid
+        ValueError: If threshold or top_k are invalid, or if threshold is NaN
     """
     if threshold is not None:
         if not isinstance(threshold, (int, float)):
@@ -2217,8 +2217,11 @@ class Memory(MemoryBase):
         query_lemmatized = lemmatize_for_bm25(query)
         try:
             query_entities = extract_entities(query)
-        except Exception:
-            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+        except Exception as error:
+            logger.debug(
+                "Entity extraction failed for search query (%s); continuing without entity candidates",
+                type(error).__name__,
+            )
             query_entities = []
         embeddings = self.embedding_model.embed(query, "search")
         internal_limit = max(limit * 4, 60)
@@ -2330,8 +2333,11 @@ class Memory(MemoryBase):
         query_lemmatized = lemmatize_for_bm25(query, unicode_fallback=False)
         try:
             query_entities = extract_entities(query)
-        except Exception:
-            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+        except Exception as error:
+            logger.debug(
+                "Entity extraction failed for search query (%s); continuing without entity candidates",
+                type(error).__name__,
+            )
             query_entities = []
 
         # Step 2: Embed query
@@ -4442,8 +4448,11 @@ class AsyncMemory(MemoryBase):
         query_lemmatized = await asyncio.to_thread(lemmatize_for_bm25, query)
         try:
             query_entities = await asyncio.to_thread(extract_entities, query)
-        except Exception:
-            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+        except Exception as error:
+            logger.debug(
+                "Entity extraction failed for search query (%s); continuing without entity candidates",
+                type(error).__name__,
+            )
             query_entities = []
         embeddings = await asyncio.to_thread(self.embedding_model.embed, query, "search")
         internal_limit = max(limit * 4, 60)
@@ -4561,8 +4570,11 @@ class AsyncMemory(MemoryBase):
         query_lemmatized = await asyncio.to_thread(lemmatize_for_bm25, query, unicode_fallback=False)
         try:
             query_entities = await asyncio.to_thread(extract_entities, query)
-        except Exception:
-            logger.debug("Entity extraction failed for search query; continuing without entity candidates")
+        except Exception as error:
+            logger.debug(
+                "Entity extraction failed for search query (%s); continuing without entity candidates",
+                type(error).__name__,
+            )
             query_entities = []
 
         # Step 2: Embed query
