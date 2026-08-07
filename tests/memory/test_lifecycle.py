@@ -300,3 +300,12 @@ def test_rrf_top_k_zero_returns_zero_rows():
     )
 
     assert ranked == []
+
+
+def test_recall_mode_fallback_defaults_to_state_aware():
+    from types import SimpleNamespace
+
+    from mem0.memory.main import _recall_mode
+
+    assert _recall_mode(SimpleNamespace()) == "state_aware"
+    assert _recall_mode(SimpleNamespace(recall=SimpleNamespace(mode="legacy"))) == "legacy"

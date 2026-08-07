@@ -572,6 +572,11 @@ def _safe_deepcopy_config(config):
             return type("Config", (), clone_dict)()
 
 
+def _recall_mode(config) -> str:
+    """Resolve the recall mode; configs without a recall attribute default to state-aware."""
+    return getattr(getattr(config, "recall", None), "mode", "state_aware")
+
+
 def _normalize_iso_timestamp_to_utc(timestamp: Optional[str]) -> Optional[str]:
     """Normalize timezone-aware ISO timestamps to UTC without rewriting naive values."""
     if not timestamp:
@@ -1258,7 +1263,7 @@ class Memory(MemoryBase):
 
         # Phase 1: Existing memory retrieval
         search_filters = {k: v for k, v in filters.items() if k in ("user_id", "agent_id", "run_id") and v}
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "state_aware")
+        recall_mode = _recall_mode(self.config)
         skip_semantic_context = (
             recall_mode == "state_aware"
             and getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is not True
@@ -2173,7 +2178,7 @@ class Memory(MemoryBase):
         show_expired=False,
         max_chars=None,
     ):
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "legacy")
+        recall_mode = _recall_mode(self.config)
         if recall_mode == "legacy":
             return self._search_vector_store_legacy(
                 query,
@@ -2827,7 +2832,7 @@ class Memory(MemoryBase):
         if not isinstance(data, str):
             raise ValueError(f"Memory with id {memory_id} does not have text content to update")
         text_changed = data != prev_value
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "legacy")
+        recall_mode = _recall_mode(self.config)
         lifecycle_managed = (
             existing_memory.payload.get("_mem0_schema_version") == SCHEMA_VERSION
             and existing_memory.payload.get("_mem0_kind") in STATE_LIKE_KINDS
@@ -3439,7 +3444,7 @@ class AsyncMemory(MemoryBase):
 
         # Phase 1: Existing memory retrieval
         search_filters = {k: v for k, v in effective_filters.items() if k in ("user_id", "agent_id", "run_id") and v}
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "state_aware")
+        recall_mode = _recall_mode(self.config)
         skip_semantic_context = (
             recall_mode == "state_aware"
             and getattr(type(self.vector_store), "_mem0_supports_complete_list", False) is not True
@@ -4387,7 +4392,7 @@ class AsyncMemory(MemoryBase):
         show_expired=False,
         max_chars=None,
     ):
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "legacy")
+        recall_mode = _recall_mode(self.config)
         if recall_mode == "legacy":
             return await self._search_vector_store_legacy(
                 query,
@@ -5100,7 +5105,7 @@ class AsyncMemory(MemoryBase):
         if not isinstance(data, str):
             raise ValueError(f"Memory with id {memory_id} does not have text content to update")
         text_changed = data != prev_value
-        recall_mode = getattr(getattr(self.config, "recall", None), "mode", "legacy")
+        recall_mode = _recall_mode(self.config)
         lifecycle_managed = (
             existing_memory.payload.get("_mem0_schema_version") == SCHEMA_VERSION
             and existing_memory.payload.get("_mem0_kind") in STATE_LIKE_KINDS
