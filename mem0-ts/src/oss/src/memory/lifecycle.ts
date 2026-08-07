@@ -243,6 +243,30 @@ export function stripInternalMetadata(
   );
 }
 
+// Identity keys stripped from caller-supplied metadata on add()/update() so
+// callers cannot inject or overwrite a memory's identity scope (#6277 / #6278
+// / #6342 / #6367). Covers user_id/agent_id/run_id/actor_id in both casings.
+const IDENTITY_METADATA_KEYS = new Set([
+  "user_id",
+  "agent_id",
+  "run_id",
+  "actor_id",
+  "userId",
+  "agentId",
+  "runId",
+  "actorId",
+]);
+
+export function stripIdentityKeys(
+  metadata?: Readonly<Record<string, unknown>> | null,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(metadata ?? {}).filter(
+      ([key]) => !IDENTITY_METADATA_KEYS.has(key),
+    ),
+  );
+}
+
 export function buildLifecycleMetadata(
   extraction: LifecycleExtraction,
   messages: readonly LifecycleMessage[],

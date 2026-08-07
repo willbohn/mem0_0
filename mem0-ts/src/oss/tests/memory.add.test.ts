@@ -192,4 +192,46 @@ describe("Memory - add()", () => {
       expect.objectContaining({ event: "ADD" }),
     );
   });
+
+  // Regression: add() must not mutate the caller's filters object, must strip
+  // identity keys out of caller metadata (snake_case or camelCase), and must
+  // still persist scope when identity is supplied only via filters.
+  test("add() does not mutate the caller's filters object", async () => {
+    const callerFilters: Record<string, any> = {};
+    await memory.add("hello world", {
+      userId: "u1",
+      filters: callerFilters,
+      infer: false,
+    });
+    expect(callerFilters).toEqual({});
+  });
+
+  test("add() metadata cannot inject an identity field (snake_case or camelCase)", async () => {
+    const victim = `victim_${Date.now()}`;
+    const agentId = `agent_${Date.now()}`;
+    const addResult = await memory.add("agent-scoped secret", {
+      agentId,
+      metadata: { user_id: victim, userId: victim, actor_id: "spoof" },
+      infer: false,
+    });
+    const id = addResult.results[0].id;
+
+    const agentList = await memory.getAll({ filters: { agent_id: agentId } });
+    expect(agentList.results.map((m) => m.id)).toContain(id);
+
+    const victimList = await memory.getAll({ filters: { user_id: victim } });
+    expect(victimList.results.map((m) => m.id)).not.toContain(id);
+  });
+
+  test("add() with identity supplied only via filters persists that scope", async () => {
+    const filtersUser = `filters_only_${Date.now()}`;
+    const addResult = await memory.add("scoped only via filters", {
+      filters: { user_id: filtersUser },
+      infer: false,
+    });
+    const id = addResult.results[0].id;
+
+    const list = await memory.getAll({ filters: { user_id: filtersUser } });
+    expect(list.results.map((m) => m.id)).toContain(id);
+  });
 });
