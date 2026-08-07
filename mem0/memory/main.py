@@ -162,17 +162,19 @@ DELETE_ALL_BATCH_SIZE = 1000
 _IDENTITY_KEYS = ENTITY_PARAMS | {"actor_id"}
 
 
-def _strip_identity_keys(metadata: Dict[str, Any], existing_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _strip_identity_keys(
+    metadata: Dict[str, Any], existing_payload: Dict[str, Any], context: str = "update()"
+) -> Dict[str, Any]:
     """Drop immutable identity and reserved lifecycle fields from caller metadata."""
     clean = {}
     for key, value in metadata.items():
         if str(key).startswith("_mem0_"):
             if value != existing_payload.get(key):
-                logger.warning(f"update(): ignoring metadata['{key}'] - lifecycle fields are managed internally")
+                logger.warning(f"{context}: ignoring metadata['{key}'] - lifecycle fields are managed internally")
         elif key not in _IDENTITY_KEYS:
             clean[key] = value
         elif value != existing_payload.get(key):
-            logger.warning(f"update(): ignoring metadata['{key}'] - identity fields are immutable after creation")
+            logger.warning(f"{context}: ignoring metadata['{key}'] - identity fields are set from parameters")
     return clean
 
 
@@ -590,11 +592,11 @@ def _build_filters_and_metadata(
               scoped to the provided session(s) and potentially a resolved actor.
     """
 
-    base_metadata_template = {
-        key: deepcopy(value)
-        for key, value in (input_metadata or {}).items()
-        if not str(key).startswith("_mem0_")
-    }
+    base_metadata_template = _strip_identity_keys(
+        {key: deepcopy(value) for key, value in (input_metadata or {}).items()},
+        {},
+        context="add()",
+    )
     effective_query_filters = deepcopy(input_filters) if input_filters else {}
 
     # ---------- validate and add all provided session ids ----------

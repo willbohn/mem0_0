@@ -1412,3 +1412,58 @@ async def test_async_state_transition_never_mutates_unversioned_lifecycle_like_r
     new_payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
     assert "_mem0_supersedes" not in new_payload
     memory.vector_store.update.assert_not_called()
+
+
+def test_add_metadata_cannot_inject_identity_scope(monkeypatch):
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    memory.add(
+        [{"role": "user", "content": "note"}],
+        run_id="r1",
+        infer=False,
+        metadata={"topic": "t", "user_id": "victim", "agent_id": "spoof", "actor_id": "spoof-actor"},
+    )
+
+    payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert payload["run_id"] == "r1"
+    assert payload["topic"] == "t"
+    assert "user_id" not in payload
+    assert "agent_id" not in payload
+    assert "actor_id" not in payload
+
+
+@pytest.mark.asyncio
+async def test_async_add_metadata_cannot_inject_identity_scope(monkeypatch):
+    memory = make_memory([], memory_class=AsyncMemory)
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice_async", AsyncMock())
+
+    await memory.add(
+        [{"role": "user", "content": "note"}],
+        run_id="r1",
+        infer=False,
+        metadata={"user_id": "victim", "actor_id": "spoof-actor"},
+    )
+
+    payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert payload["run_id"] == "r1"
+    assert "user_id" not in payload
+    assert "actor_id" not in payload
+
+
+def test_add_kwarg_identity_still_wins_over_metadata(monkeypatch):
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    memory.add(
+        [{"role": "user", "content": "note"}],
+        user_id="real",
+        infer=False,
+        metadata={"user_id": "victim"},
+    )
+
+    payload = memory.vector_store.insert.call_args.kwargs["payloads"][0]
+    assert payload["user_id"] == "real"
