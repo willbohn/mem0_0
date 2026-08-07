@@ -492,7 +492,20 @@ def add_memory(memory_create: MemoryCreate, _auth=Depends(verify_auth)):
 
 
 ALL_MEMORIES_LIMIT = 1000
-_RESERVED_PAYLOAD_KEYS = {"data", "user_id", "agent_id", "run_id", "hash", "created_at", "updated_at", "expiration_date"}
+_RESERVED_PAYLOAD_KEYS = {
+    "data",
+    "user_id",
+    "agent_id",
+    "run_id",
+    "actor_id",
+    "role",
+    "attributed_to",
+    "hash",
+    "created_at",
+    "updated_at",
+    "expiration_date",
+    "text_lemmatized",
+}
 
 
 def _serialize_memory(row: Any) -> Dict[str, Any]:
@@ -503,6 +516,9 @@ def _serialize_memory(row: Any) -> Dict[str, Any]:
         "user_id": payload.get("user_id"),
         "agent_id": payload.get("agent_id"),
         "run_id": payload.get("run_id"),
+        "actor_id": payload.get("actor_id"),
+        "role": payload.get("role"),
+        "attributed_to": payload.get("attributed_to"),
         "hash": payload.get("hash"),
         "expiration_date": payload.get("expiration_date"),
         "metadata": strip_internal_metadata(

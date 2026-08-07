@@ -794,6 +794,10 @@ class TestGetMemories:
                     "source": "fixture",
                     "_mem0_status": "active",
                     "_mem0_source_hashes": ["a" * 64],
+                    "text_lemmatized": "love hike weekend",
+                    "actor_id": "actor-1",
+                    "role": "user",
+                    "attributed_to": "someone",
                 },
             )
         ]]
@@ -801,7 +805,11 @@ class TestGetMemories:
         response = client.get("/memories?top_k=1")
 
         assert response.status_code == 200
-        assert response.json()["results"][0]["metadata"] == {"source": "fixture"}
+        row = response.json()["results"][0]
+        assert row["metadata"] == {"source": "fixture"}
+        assert row["actor_id"] == "actor-1"
+        assert row["role"] == "user"
+        assert row["attributed_to"] == "someone"
 
     def test_get_memories_rejects_top_k_above_limit(self, client, mock_memory):
         response = client.get("/memories?user_id=test_routing_user&top_k=1001")
