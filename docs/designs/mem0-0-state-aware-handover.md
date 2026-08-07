@@ -1,6 +1,6 @@
 # mem0_0 State-Aware Implementation Handover
 
-Last refreshed: 2026-08-07 13:30 JST
+Last refreshed: 2026-08-07 21:00 JST
 
 This handover is for the next agent continuing the state-aware lifecycle, benchmark, and local deployment work in `/home/will/Documents/CodingWorkspaces/mem0_0`. Treat it as a checkpoint, not as authority over the current repository or runtime: re-run the content-free checks below before changing anything.
 
@@ -19,7 +19,7 @@ This handover is for the next agent continuing the state-aware lifecycle, benchm
 - Implementation candidate: `75021d0a616e7939eb58086f7a46c9dd86433a6b`
 - Candidate source-tree SHA-256: `33fb027e79dd8335ebeb01b90d6c655f2941f0bff75ff757caef62b57851832c`
 - Base branch at the checkpoint: local `main` at `50bdaaea`, tracking `origin/main`
-- The feature branch contains 29 implementation commits beyond that base and now tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the implementation candidate, is pushed; the branch is ahead of origin only by documentation-only commits (design `461d4822`, design amendment `94bd26c3`, and this handover refresh) and behind by 0.
+- The feature branch tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the implementation candidate, is pushed; the branch is now ahead of origin by 27 unpushed commits (four documentation checkpoints — design `461d4822`, amendment `94bd26c3`, handover `7596eea2`, plan `01434694` — plus 23 stabilization implementation commits ending at the checkpoint HEAD recorded below, plus this handover refresh) and behind by 0.
 - Remote fork: `origin` (`willbohn/mem0_0`); upstream project: `upstream` (`mem0ai/mem0`). The upstream comparison revision pinned by the stabilization design is `mem0ai/mem0` `main` at `4a0a9a92`.
 - Do not push without new explicit approval for the exact revision being pushed. Never force-push.
 
@@ -237,7 +237,74 @@ followed by an approved amendment. No implementation code changed.
   blocked, OMP validation blocked on installation.
 - Next bounded task: write and commit the regression-first implementation
   plan for the amended design, then obtain plan approval before modifying
-  implementation code.
+  implementation code. (Completed — see the next checkpoint.)
+
+## Stabilization implementation checkpoint (2026-08-07)
+
+Purpose: execute the approved regression-first stabilization plan
+(`docs/superpowers/plans/2026-08-07-mem0-0-stabilization-implementation.md`)
+via fresh per-task subagents, task-scoped reviews, a final whole-branch
+adversarial review, and cold-context verification. No runtime, deployment,
+installed-harness, CI/CD, or production state changed.
+
+- Branch and checkout HEAD: `feat/state-aware-memory-python` at
+  `dea83cbe7433934fd8fc9fee59d37f01a0e25010` — 23 implementation commits
+  above the plan commit `01434694`, one coherent commit per bounded task
+  plus a reviewed final fix wave.
+- Running shadow candidate and source digest: UNCHANGED (`75021d0a`,
+  `33fb027e...`). The shadow does not run the stabilization code; a future
+  shadow refresh must attest the new tested SHA before any runtime claim
+  changes.
+- What landed: Python identity-scope stripping on `add()`; typed
+  `ExtractionParseError` (EXTRACT_001) with a `skipped_invalid_extractions`
+  disclosure field; NaN threshold rejection; `top_k=0` zero rows with
+  validation-order parity across `search`/`get_all`; recall-mode fallback
+  unification; Ollama plain `ImportError` and 768-dim default; FastEmbed
+  list normalization; Hugging Face API-key forwarding; import-time
+  config-directory guard; non-mutating reranker fallbacks and `LlmFactory`
+  merge; lexical crash hardening; body-free invalid-message logging; REST
+  admin serializer alignment (with additive promoted keys); a
+  metadata-boundary pinning matrix; the TypeScript `add()` combined fix
+  (filters clone, identity stripping in both casings, filters-only scope
+  persistence); bridge-side `max_chars` (default 16,384 with
+  `omitted_for_budget` disclosure, never forwarded to REST); provisional OMP
+  harness artifacts under `deployment/mem0_0_arch/harnesses/omp/`;
+  acceptance-classes documentation and the README fork-notice sentence.
+- Validation evidence (content-free):
+  - Full Python suite with the Redis Stack fixture: 2,143 passed, 69
+    skipped; the only failures/errors (9 failed, 154 errors) are a
+    pre-existing JWT_SECRET import-order coupling in the server auth/params
+    tests, reproduced byte-identical at the plan-base commit in an isolated
+    worktree and confirmed present on `main`.
+  - TypeScript: full Jest 1,461/1,503 passed (42 skipped; baseline plus the
+    3 new tests); `tsup` build passed; `tsc --noEmit` diagnostics identical
+    line-for-line to the pinned baseline (`main` @ `50bdaaea`, 26
+    diagnostics); Prettier clean on changed files.
+  - Fresh cold-context verifier: CONFIRMED — suites re-run, and
+    identity-injection, malformed-extraction, `top_k=0`, and bridge
+    `max_chars` behaviors exercised, including an out-of-pytest
+    reproduction of the identity fix.
+  - Final whole-branch adversarial review: zero Critical findings; the one
+    Important finding (search `top_k=0` validation ordering) was fixed and
+    re-reviewed ADDRESSED; all deferred minor findings triaged
+    non-blocking.
+- Known follow-ups, explicitly deferred and not blocking:
+  1. `ci.yml` does not install the server dependencies, so the server
+     auth/params tests silently skip in CI and the JWT_SECRET
+     order-coupling bug is invisible there. CI edits were prohibited this
+     phase; fixing it needs an explicitly approved CI change.
+  2. The pre-existing JWT_SECRET/AUTH_DISABLED import-time coupling in the
+     server test infrastructure itself.
+  3. TypeScript `add()` does not validate `filters` identity values as
+     strings (pre-existing gap); REST maps EXTRACT_001 to a generic 5xx
+     (operability polish); spaCy configurability and the empty-lemma
+     fallback still need their own bounded design with index migration.
+- Remaining gates: unchanged — official benchmark deferred and unclaimed;
+  cutover blocked; OMP validation pending installation; pushing requires
+  explicit approval for the exact SHA.
+- Next bounded task: write and approve the bounded personal local
+  acceptance suite implementation plan (the separate follow-up plan the
+  amended design requires), or obtain explicit approval to push the branch.
 
 ## Benchmark status and hard gate
 
@@ -267,7 +334,7 @@ Acceptance still requires:
 ## Recommended continuation order
 
 1. Re-attest Git and runtime state using the content-free commands above.
-2. Execute the approved 2026-08-07 stabilization design: write and commit the regression-first implementation plan, obtain approval, then implement and verify one bounded workstream at a time, including the bounded personal local acceptance suite.
+2. Stabilization implementation is complete and verified (see the 2026-08-07 implementation checkpoint). Next in that thread: write and approve the bounded personal local acceptance suite plan, then implement it.
 3. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
 4. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
 5. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
@@ -289,6 +356,8 @@ Do not manufacture a cutover record or bypass those gates. Production-port chang
 
 - `docs/designs/mem0-0-state-aware-rollout.md` — approved rollout plan and invariants
 - `docs/superpowers/specs/2026-08-07-mem0-0-stabilization-and-omp-design.md` — approved and amended stabilization and OMP compatibility design
+- `docs/superpowers/plans/2026-08-07-mem0-0-stabilization-implementation.md` — executed stabilization implementation plan
+- `deployment/mem0_0_arch/harnesses/omp/` — provisional OMP harness artifacts (pending installation)
 - `deployment/mem0_0_arch/README.md` — migration, readiness, live verification, cutover, and rollback runbook
 - `evaluation_overlay/README.md` — benchmark overlay and provenance rules
 - `docs/open-source/configuration.mdx` — state-aware and legacy configuration
