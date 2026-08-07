@@ -143,17 +143,32 @@ def _mock_memory():
 
 
 @pytest.fixture
-def client(_mock_memory, monkeypatch):
+def client(_mock_memory, monkeypatch, request):
     """Return a TestClient wired to the server app with mocked Memory."""
-    # auth.AUTH_DISABLED is a module-level constant read once at import time.
-    # If any earlier-collected test (e.g. test_api_keys_router.py) already
-    # imported `auth` under a different environment, server.main would inherit
-    # that stale value even after its own reload below. If `auth` is already
-    # cached, force a fresh read of it here, under the environment
-    # _mock_memory has already patched.
-    _cached_auth = sys.modules.get("auth")
-    if _cached_auth is not None:
-        importlib.reload(_cached_auth)
+    # auth.AUTH_DISABLED and auth.ADMIN_API_KEY are module-level constants read
+    # once at import time -- whichever test imports `auth` FIRST in the
+    # process permanently bakes its own environment into that cached module,
+    # and neither a raw importlib.reload() nor monkeypatch.setattr on an
+    # already-cached module undoes that for a *later* first-time importer.
+    # So: (1) always force the values this fixture needs via monkeypatch,
+    # scoped to this fixture and reverted automatically at teardown, and
+    # (2) if `auth` / `server.main` were not already cached before this
+    # fixture ran, drop them from sys.modules at teardown too, so the next
+    # test to import them gets a genuinely fresh read of its own environment
+    # instead of inheriting ours (see tests/test_server_auth.py, which is
+    # not scope-isolation-related but shares this module-caching hazard).
+    auth_was_cached = "auth" in sys.modules
+    server_main_was_cached = "server.main" in sys.modules
+
+    # Import (or fetch the cached) `auth` module and patch it *before* ever
+    # touching server.main: server/main.py raises at import time if it sees
+    # AUTH_DISABLED=False and no JWT_SECRET (server/main.py:92-95), and that
+    # check fires on the very first `import server.main` statement below --
+    # patching `auth` only after that first import would be too late.
+    auth_module = importlib.import_module("auth")
+    monkeypatch.setattr(auth_module, "AUTH_DISABLED", True)
+    monkeypatch.setattr(auth_module, "ADMIN_API_KEY", "")
+
     import server.main as server_main
 
     with patch.dict(os.environ, {"ADMIN_API_KEY": "", "AUTH_DISABLED": "true"}):
@@ -165,6 +180,14 @@ def client(_mock_memory, monkeypatch):
     )
     monkeypatch.setattr(server_main, "_should_log_request", lambda _request: False)
     server_main.app.dependency_overrides[server_main.require_admin] = lambda: SimpleNamespace(role="admin")
+
+    def _drop_freshly_cached_modules():
+        if not auth_was_cached:
+            sys.modules.pop("auth", None)
+        if not server_main_was_cached:
+            sys.modules.pop("server.main", None)
+
+    request.addfinalizer(_drop_freshly_cached_modules)
     return TestClient(server_main.app)
 
 
