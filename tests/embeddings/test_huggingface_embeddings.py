@@ -94,7 +94,7 @@ def test_embed_with_huggingface_base_url():
         embedder = HuggingFaceEmbedding(config)
         result = embedder.embed("Hello from custom endpoint")
 
-        mock_openai.assert_called_once_with(base_url="http://localhost:8080")
+        mock_openai.assert_called_once_with(base_url="http://localhost:8080", api_key=None)
         mock_client.embeddings.create.assert_called_once_with(
             input="Hello from custom endpoint",
             model="my-custom-model",
@@ -169,3 +169,10 @@ def test_embed_batch_count_mismatch_raises_sentence_transformer(mock_sentence_tr
 
     with pytest.raises(ValueError, match="returned 1 embeddings for 2 texts"):
         embedder.embed_batch(["first text", "second text"])
+
+
+def test_openai_compatible_client_receives_configured_api_key():
+    with patch("mem0.embeddings.huggingface.OpenAI") as mock_openai:
+        config = BaseEmbedderConfig(api_key="hf_test_key", huggingface_base_url="http://localhost:8080/v1")
+        HuggingFaceEmbedding(config)
+    mock_openai.assert_called_once_with(base_url="http://localhost:8080/v1", api_key="hf_test_key")
