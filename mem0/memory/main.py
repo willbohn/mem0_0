@@ -1157,7 +1157,10 @@ class Memory(MemoryBase):
                     or message_dict.get("role") is None
                     or message_dict.get("content") is None
                 ):
-                    logger.warning(f"Skipping invalid message format: {message_dict}")
+                    logger.warning(
+                        "Skipping invalid message format: keys=%s",
+                        sorted(message_dict) if isinstance(message_dict, dict) else type(message_dict).__name__,
+                    )
                     continue
 
                 if message_dict["role"] == "system":
@@ -3342,7 +3345,10 @@ class AsyncMemory(MemoryBase):
                     or message_dict.get("role") is None
                     or message_dict.get("content") is None
                 ):
-                    logger.warning(f"Skipping invalid message format (async): {message_dict}")
+                    logger.warning(
+                        "Skipping invalid message format (async): keys=%s",
+                        sorted(message_dict) if isinstance(message_dict, dict) else type(message_dict).__name__,
+                    )
                     continue
 
                 if message_dict["role"] == "system":

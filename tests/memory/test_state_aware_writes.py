@@ -1578,3 +1578,35 @@ async def test_async_search_top_k_zero_returns_zero_rows(monkeypatch):
 
     assert await memory.search("query", filters={"user_id": "u1"}, top_k=0) == {"results": []}
     memory.embedding_model.embed.assert_not_called()
+
+
+def test_invalid_message_warning_does_not_log_bodies(monkeypatch, caplog):
+    memory = make_memory([])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice", lambda *_a, **_k: None)
+
+    # Missing "role" (not just a "bogus" key) so the message survives
+    # parse_vision_messages' content-presence filter and actually reaches
+    # the invalid-format branch in _add_to_vector_store.
+    with caplog.at_level("WARNING"):
+        memory.add(
+            [{"content": "SECRET-BODY-TOKEN"}, {"role": "user", "content": "keep me"}],
+            user_id="u1",
+            infer=False,
+        )
+    assert "SECRET-BODY-TOKEN" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_invalid_message_warning_does_not_log_bodies(monkeypatch, caplog):
+    memory = make_memory([], memory_class=AsyncMemory)
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+    monkeypatch.setattr("mem0.memory.main.display_first_run_notice_async", AsyncMock())
+
+    with caplog.at_level("WARNING"):
+        await memory.add(
+            [{"content": "SECRET-BODY-TOKEN"}, {"role": "user", "content": "keep me"}],
+            user_id="u1",
+            infer=False,
+        )
+    assert "SECRET-BODY-TOKEN" not in caplog.text
