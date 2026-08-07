@@ -165,3 +165,10 @@ python -m evaluation_overlay.cli compare --baseline baseline-summary.json --cand
 ```
 
 The comparison exits nonzero if any declared metric is absent or fails its gate. Run gates separately for LoCoMo, LongMemEval, and BEAM so the one-percentage-point answer-accuracy limit is enforced per benchmark, not hidden by a pooled average.
+
+## Acceptance classes
+
+This overlay serves two distinct, non-substitutable acceptance classes; neither stands in for the other.
+
+1. **Deferred official benchmark gate.** The full STALE, Memora/FAMA, LoCoMo, LongMemEval, and BEAM run described above is the official research-benchmark acceptance gate. It remains unrun and unclaimed for the current state-aware candidate, and its thresholds are unchanged by anything below.
+2. **Bounded personal local acceptance suite.** A separate, smaller suite defined in the 2026-08-07 design provides bounded local confidence only, within fixed budgets: at most 24 mutation families, at most 120 mutations, at most 48 `infer=true` writes, and a 100-minute provider wall-clock cap. It must never be presented as, or substituted for, official benchmark acceptance. Its implementation is tracked as a separate follow-up plan and is not part of this overlay.
