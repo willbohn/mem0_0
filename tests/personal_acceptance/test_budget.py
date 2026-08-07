@@ -55,3 +55,13 @@ def test_snapshot_is_scalar_only():
     snap = ledger.snapshot()
     assert set(snap) == {"families", "mutations", "infer_writes", "provider_elapsed_seconds"}
     assert all(isinstance(value, (bool, int, float)) for value in snap.values())
+
+
+def test_infer_write_rejected_by_mutation_budget_leaves_no_partial_state():
+    ledger = BudgetLedger(max_mutations=1, max_infer_writes=48)
+    ledger.record_mutation("delete")
+    with pytest.raises(BudgetExceeded) as excinfo:
+        ledger.record_infer_write()
+    assert excinfo.value.limit == "mutations"
+    assert ledger.snapshot()["infer_writes"] == 0
+    assert ledger.snapshot()["mutations"] == 1
