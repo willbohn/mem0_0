@@ -1176,6 +1176,11 @@ class Memory(MemoryBase):
             messages = parse_vision_messages(messages)
 
         stats: Dict[str, Any] = {}
+        bounded_write_kwargs = {}
+        if max_extractions is not None:
+            bounded_write_kwargs["max_extractions"] = max_extractions
+        if max_mutations is not None:
+            bounded_write_kwargs["max_mutations"] = max_mutations
         vector_store_result = self._add_to_vector_store(
             messages,
             processed_metadata,
@@ -1183,8 +1188,7 @@ class Memory(MemoryBase):
             infer,
             prompt=prompt,
             stats=stats,
-            max_extractions=max_extractions,
-            max_mutations=max_mutations,
+            **bounded_write_kwargs,
         )
         scale_threshold_notice = detect_scale_threshold_from_add_result(self, vector_store_result)
         if temporal_usage_notice:
@@ -3398,6 +3402,11 @@ class AsyncMemory(MemoryBase):
             messages = parse_vision_messages(messages)
 
         stats: Dict[str, Any] = {}
+        bounded_write_kwargs = {}
+        if max_extractions is not None:
+            bounded_write_kwargs["max_extractions"] = max_extractions
+        if max_mutations is not None:
+            bounded_write_kwargs["max_mutations"] = max_mutations
         vector_store_result = await self._add_to_vector_store(
             messages,
             processed_metadata,
@@ -3405,8 +3414,7 @@ class AsyncMemory(MemoryBase):
             infer,
             prompt=prompt,
             stats=stats,
-            max_extractions=max_extractions,
-            max_mutations=max_mutations,
+            **bounded_write_kwargs,
         )
         scale_threshold_notice = await asyncio.to_thread(
             detect_scale_threshold_from_add_result, self, vector_store_result
