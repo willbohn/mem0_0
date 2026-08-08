@@ -392,6 +392,24 @@ def test_provider_tier_with_reconciled_golden_result_is_ok(monkeypatch, key_file
     assert report["ok"] is True
 
 
+def test_provider_tier_rejects_a_noncanonical_roster_before_any_request(key_file, receipt_and_home):
+    receipt, home = receipt_and_home
+    api = FakeProviderAPI()
+
+    with pytest.raises(ValueError, match="locked provider family roster"):
+        runner.build_report(
+            tier="provider",
+            families=(),
+            ledger=BudgetLedger(),
+            receipt=receipt,
+            home=home,
+            clock=lambda: 1.0,
+            provider_kwargs={"api_key_file": key_file, "opener": api, "timeout": 1},
+        )
+
+    assert api.requests == []
+
+
 # Bonus: the other reconcile() failure branch (MigrationConflictError), never re-raised.
 def test_reconcile_returns_false_on_migration_conflict_error(tmp_path, monkeypatch):
     def _raise(*args, **kwargs):

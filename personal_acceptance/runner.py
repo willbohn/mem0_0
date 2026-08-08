@@ -145,6 +145,9 @@ def run_provider(families: Iterable[Family], ledger: BudgetLedger, **flow_kwargs
     ``run_provider``) -- without it the wall-clock cap silently never fires.
     """
     families = tuple(families)
+    expected_families = tuple(family for family in FAMILIES if family.tier == "provider")
+    if families != expected_families:
+        raise ValueError("provider execution requires the exact locked provider family roster")
     flows = AcceptanceFlows(
         ledger=ledger,
         planned_mutations=sum(family.planned_mutations for family in families),
