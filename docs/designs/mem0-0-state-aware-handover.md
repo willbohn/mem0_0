@@ -1,6 +1,6 @@
 # mem0_0 State-Aware Implementation Handover
 
-Last refreshed: 2026-08-07 21:00 JST
+Last refreshed: 2026-08-08 JST
 
 This handover is for the next agent continuing the state-aware lifecycle, benchmark, and local deployment work in `/home/will/Documents/CodingWorkspaces/mem0_0`. Treat it as a checkpoint, not as authority over the current repository or runtime: re-run the content-free checks below before changing anything.
 
@@ -17,9 +17,11 @@ This handover is for the next agent continuing the state-aware lifecycle, benchm
 
 - Branch: `feat/state-aware-memory-python`
 - Implementation candidate: `75021d0a616e7939eb58086f7a46c9dd86433a6b`
+- Bounded personal-acceptance implementation head:
+  `7c8d60dc268763e0c2c4e605db763f2df67ed9ec`
 - Candidate source-tree SHA-256: `33fb027e79dd8335ebeb01b90d6c655f2941f0bff75ff757caef62b57851832c`
 - Base branch at the checkpoint: local `main` at `50bdaaea`, tracking `origin/main`
-- The feature branch tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the implementation candidate, is pushed; the branch is now ahead of origin by 27 unpushed commits (four documentation checkpoints — design `461d4822`, amendment `94bd26c3`, handover `7596eea2`, plan `01434694` — plus 23 stabilization implementation commits ending at the checkpoint HEAD recorded below, plus this handover refresh) and behind by 0.
+- The feature branch tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the deployed implementation candidate, is pushed; after this refresh the branch is ahead of origin by 48 unpushed commits and behind by 0. The unpushed history contains the approved stabilization design, plan, implementation, and handover commits plus the bounded personal-acceptance plan and implementation recorded below.
 - Remote fork: `origin` (`willbohn/mem0_0`); upstream project: `upstream` (`mem0ai/mem0`). The upstream comparison revision pinned by the stabilization design is `mem0ai/mem0` `main` at `4a0a9a92`.
 - Do not push without new explicit approval for the exact revision being pushed. Never force-push.
 
@@ -84,7 +86,7 @@ Primary files:
 
 ## Current local deployment snapshot
 
-Refreshed content-free on 2026-08-06 at 14:11 JST:
+Refreshed content-free on 2026-08-08:
 
 | Resource | Legacy | Canonical shadow |
 |---|---|---|
@@ -306,6 +308,84 @@ installed-harness, CI/CD, or production state changed.
   acceptance suite implementation plan (the separate follow-up plan the
   amended design requires), or obtain explicit approval to push the branch.
 
+## Bounded personal acceptance checkpoint (2026-08-08)
+
+Purpose: finish the interrupted implementation plan at
+`docs/superpowers/plans/2026-08-07-personal-acceptance-suite.md`, close its
+verification and adversarial-review gate, and leave an exact operational
+handover. No live provider tier, runtime mutation, deployment change,
+installed-harness change, CI/CD change, benchmark, cutover, or push occurred.
+
+- The locked suite under `personal_acceptance/` contains 21 scenario
+  families: 16 deterministic and 5 provider-backed. Reports are scalar and
+  content-free, with `acceptance_class="bounded_personal_local"`; this suite
+  is not an official benchmark.
+- The deterministic tier passed all 16 families, including TypeScript:
+  53 pytest checks passed, none failed or skipped, and `scope_ts=true`.
+  It recorded zero mutations and zero `infer=true` writes.
+- The focused Python acceptance selection passed 54 tests with one deliberate
+  provider-integration skip. The skip is outside the deterministic runner's
+  locked required nodes; required skipped, xfailed, xpassed, or deselected
+  nodes now fail their family.
+- The full Python suite with a disposable Redis Stack fixture reported 2,205
+  passed, 69 skipped, 9 failed, and 160 errors. Every failure/error was
+  confined to the already-recorded `tests/test_server_auth.py` and
+  `tests/test_server_params.py` `AUTH_DISABLED`/`JWT_SECRET` import-order
+  coupling; acceptance-suite tests were green. The fixture was removed.
+- TypeScript Jest passed 91 suites and 1,461 tests (5 suites/42 tests
+  skipped); Prettier and the `tsup` build passed. Candidate and pinned local
+  `main` still produce the same 26 `tsc --noEmit` diagnostics exactly, so
+  there are no candidate-only type errors.
+- Ruff check passed on every Python file changed by the branch. The new
+  acceptance package was normalized with canonical Ruff formatting, and
+  `git diff --check` passed.
+- The exact budget/roster/provider/runner regression selection passed 40
+  tests. A fresh independent verifier reran the deterministic, focused, and
+  full Python gates at `7c8d60dc`, confirmed the TypeScript tree was unchanged
+  from its passing test/build and exact-diagnostic comparison, and reported no
+  candidate failure outside the known server auth/params coupling.
+- Fresh adversarial review found six fail-open defects across two passes: cleanup
+  could mutate beyond its budget, multi-memory add responses were
+  under-counted, wall-clock overruns after requests could pass, an arbitrary
+  loopback endpoint could be reconciled against the canonical shadow, and a
+  required skipped pytest node could pass its family. Re-review then showed
+  that client-side result counting was still too late and could strand
+  synthetic rows after an oversized inferred batch. Commits `25d61c19` and
+  `fa67d225` added regression tests and fixed the whole set: the runner now
+  reserves a conservative 32-mutation write-and-cleanup plan before any
+  provider request, precharges up to two primary memory mutations per inferred
+  call, requires the exact canonical endpoint, checks the provider clock
+  before/after work and at completion, and parses every non-pass pytest
+  outcome. Python OSS and REST now expose positive `max_extractions` and
+  `max_mutations` bounds that reject oversized extraction or insert/update
+  plans before persistence; the provider runner verifies both contracts in
+  OpenAPI before writing, pins them to one extraction/two mutations per
+  inferred call, and refuses the older deployed shadow safely. Final commit
+  `d8f09752` also pins execution to the exact locked provider-family roster,
+  rejecting any missing, reordered, or altered injected roster before the
+  OpenAPI preflight or a provider request. Full-suite verification then caught
+  two existing default-call-contract tests broken by unconditional forwarding
+  of the new optional keywords; `7c8d60dc` restores the old internal call
+  signature when both bounds are omitted while preserving explicit bounded
+  calls. Final scoped adversarial re-review reported ready with no remaining
+  correctness gaps.
+- Content-free runtime re-attestation remained unchanged: readiness was
+  `ready` for API, private config, private history, and PostgreSQL; the pinned
+  receipt reconciled with the same counts and digests above; legacy and
+  shadow containers were healthy; the shadow still attests deployed
+  candidate `75021d0a` and source digest `33fb027e...`.
+- The live provider tier remains deliberately unrun. It performs synthetic
+  writes against the shadow and consumes local-model time, so it still needs
+  separate operational approval. The exact approved command should use the
+  pinned receipt and the canonical default endpoint shown in
+  `personal_acceptance/README.md`.
+
+Remaining gates are unchanged: the bounded suite is not official benchmark
+acceptance; the official benchmarks remain deferred and unclaimed; the
+deployed shadow has not been refreshed to the newer code; OMP behavior remains
+unverified; cutover is blocked; and pushing requires explicit approval for the
+exact SHA.
+
 ## Benchmark status and hard gate
 
 The implementation and bounded local smokes pass, but the official acceptance benchmark has not run. Do not claim benchmark acceptance or perform cutover.
@@ -334,7 +414,12 @@ Acceptance still requires:
 ## Recommended continuation order
 
 1. Re-attest Git and runtime state using the content-free commands above.
-2. Stabilization implementation is complete and verified (see the 2026-08-07 implementation checkpoint). Next in that thread: write and approve the bounded personal local acceptance suite plan, then implement it.
+2. Stabilization and bounded personal-acceptance implementation are complete
+   and deterministically verified. The next optional operational sequence is
+   an approved shadow refresh to the tested bounded-write code with fresh
+   source attestation, then one approved live `provider` or `full` acceptance
+   run against that canonical shadow, followed by content-free receipt
+   reconciliation.
 3. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
 4. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
 5. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
@@ -357,6 +442,8 @@ Do not manufacture a cutover record or bypass those gates. Production-port chang
 - `docs/designs/mem0-0-state-aware-rollout.md` — approved rollout plan and invariants
 - `docs/superpowers/specs/2026-08-07-mem0-0-stabilization-and-omp-design.md` — approved and amended stabilization and OMP compatibility design
 - `docs/superpowers/plans/2026-08-07-mem0-0-stabilization-implementation.md` — executed stabilization implementation plan
+- `docs/superpowers/plans/2026-08-07-personal-acceptance-suite.md` — executed bounded personal-acceptance implementation plan
+- `personal_acceptance/README.md` — family roster, budgets, run commands, report schema, and operational gates
 - `deployment/mem0_0_arch/harnesses/omp/` — provisional OMP harness artifacts (pending installation)
 - `deployment/mem0_0_arch/README.md` — migration, readiness, live verification, cutover, and rollback runbook
 - `evaluation_overlay/README.md` — benchmark overlay and provenance rules

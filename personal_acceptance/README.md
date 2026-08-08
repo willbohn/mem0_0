@@ -42,7 +42,7 @@ unaffected by anything in this suite.
 
 The naming firewall is enforced structurally, not just by convention: every
 report's `acceptance_class` field is fixed to `"bounded_personal_local"`
-(`personal_acceptance/runner.py:225`), and no report, log, or document
+(`personal_acceptance/runner.py:241`), and no report, log, or document
 produced by this suite may name the benchmarks disclaimed above outside of
 this section.
 
@@ -128,7 +128,7 @@ uvx hatch run dev_py_3_12:python -m personal_acceptance.runner \
 ```
 
 `--tier provider` runs only the five provider families and also requires
-`--receipt`. Other flags (`personal_acceptance/runner.py:236-244`):
+`--receipt`. Other flags (`personal_acceptance/runner.py:251-260`):
 `--api-url` (fixed to the canonical default `http://127.0.0.1:28889`;
 alternate values are rejected), `--api-key-file` (default
 `/home/will/.config/mem0_0-arch/bridge-api-key`), `--history-db`, `--home`
@@ -137,7 +137,7 @@ gitignored).
 
 **Both `--tier provider` and `--tier full` require `--receipt` or the run
 exits 2** before doing any work — the reconciliation gate is mandatory for
-any shadow-touching run (`personal_acceptance/runner.py:247-252`). The
+any shadow-touching run (`personal_acceptance/runner.py:263-268`). The
 process otherwise exits `0` when the report's `ok` is `true` and `1`
 otherwise.
 
@@ -158,7 +158,7 @@ routine per-change verification.
 
 ## Report schema
 
-`build_report` (`personal_acceptance/runner.py:164-232`) returns a report
+`build_report` (`personal_acceptance/runner.py:180-248`) returns a report
 whose top-level keys are **exactly** `schema_version`, `acceptance_class`,
 `ok`, `tier`, `checks`, `counts`, `timings_ms`, `budget`:
 
@@ -174,9 +174,14 @@ whose top-level keys are **exactly** `schema_version`, `acceptance_class`,
   xfailed, xpassed, or deselected required pytest node fails its family rather
   than being accepted as a pass.
 - `timings_ms` — `float` subprocess/flow timings.
-- `budget` — the ledger snapshot (`personal_acceptance/budget.py:70-76`):
+- `budget` — the ledger snapshot (`personal_acceptance/budget.py:82-88`):
   `families`, `mutations`, `infer_writes` (all `int`), and
   `provider_elapsed_seconds` (`float`).
+
+For provider runs, `budget.mutations` is deliberately conservative: each
+inferred request is charged its server-enforced ceiling of two primary-memory
+mutations before dispatch, even if the request ultimately performs only one.
+Raw writes and cleanup deletes are charged one-for-one.
 
 Every leaf under `checks`, `counts`, `timings_ms`, and `budget` is a `bool`,
 `int`, or `float` — the report never carries a memory body, ID, or scope
@@ -187,7 +192,7 @@ value.
 Any run that touches the shadow deployment (provider or full tier) must end
 with `reconcile_shadow` (`deployment/mem0_0_arch/backup_restore.py:488-517`),
 which proves the canonical stores match one quiesced legacy receipt without
-mutating either store. `reconcile()` (`personal_acceptance/runner.py:145-161`)
+mutating either store. `reconcile()` (`personal_acceptance/runner.py:161-177`)
 returns `true` only when the result's `status` is `"reconciled"`; a
 `BackupVerificationError` or `MigrationConflictError` is caught and turned
 into `false` rather than re-raised, so a shadow-touching run always finishes
