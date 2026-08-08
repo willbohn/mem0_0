@@ -267,13 +267,37 @@ def test_run_deterministic_reruns_per_family_to_attribute_failures_content_free(
         del kwargs
         if failing_node in argv:
             return SimpleNamespace(returncode=1, stdout="1 failed in 0.10s\n", stderr="")
-        return SimpleNamespace(returncode=0, stdout="1 passed in 0.10s\n", stderr="")
+        passed = sum(node_id in argv for family in node_families for node_id in family.pytest_nodes)
+        return SimpleNamespace(returncode=0, stdout=f"{passed} passed in 0.10s\n", stderr="")
 
     report = runner.run_deterministic(families, python_executable="python3", runner=_run, skip_jest=True)
 
     assert report["checks"][node_families[0].name] is False
     for family in node_families[1:]:
         assert report["checks"][family.name] is True
+
+
+def test_run_deterministic_never_marks_a_skipped_family_as_passed():
+    """A collected-but-skipped acceptance node must fail that family."""
+    families = deterministic_families()
+    node_families = [family for family in families if family.pytest_nodes]
+    skipped_family = node_families[0]
+
+    def _run(argv, **kwargs):
+        del kwargs
+        is_aggregate = sum(node_id in argv for family in node_families for node_id in family.pytest_nodes) > len(
+            skipped_family.pytest_nodes
+        )
+        if is_aggregate:
+            return SimpleNamespace(returncode=0, stdout="52 passed, 1 skipped in 1.00s\n", stderr="")
+        if any(node_id in argv for node_id in skipped_family.pytest_nodes):
+            return SimpleNamespace(returncode=0, stdout="1 skipped in 0.10s\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout="1 passed in 0.10s\n", stderr="")
+
+    report = runner.run_deterministic(families, python_executable="python3", runner=_run, skip_jest=True)
+
+    assert report["checks"][skipped_family.name] is False
+    assert report["counts"]["pytest_skipped"] == 1
 
 
 # (d) main refuses the provider tier without --receipt: exit 2, one-line stderr, no side effects.

@@ -15,7 +15,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from deployment.mem0_0_arch.live_verify import MAX_SCOPE_RESULTS, LiveVerifier, VerificationError
+from deployment.mem0_0_arch.live_verify import (
+    DEFAULT_API_URL,
+    MAX_SCOPE_RESULTS,
+    ConfigurationError,
+    LiveVerifier,
+    VerificationError,
+)
 from personal_acceptance.budget import BudgetExceeded, BudgetLedger
 
 
@@ -36,6 +42,9 @@ class AcceptanceFlows(LiveVerifier):
         clock: Callable[[], float] = time.monotonic,
         **kwargs: Any,
     ) -> None:
+        api_url = str(kwargs.get("api_url", DEFAULT_API_URL)).rstrip("/")
+        if api_url != DEFAULT_API_URL:
+            raise ConfigurationError("personal acceptance requires the canonical shadow endpoint")
         super().__init__(**kwargs)
         self.ledger = ledger
         self.clock = clock
@@ -46,6 +55,7 @@ class AcceptanceFlows(LiveVerifier):
             "checks": {
                 "auth_file_private": self.report["checks"]["auth_file_private"],
                 "scope_complete": self.report["checks"]["scope_complete"],
+                "budget_ok": True,
                 "supersession_live_ok": False,
                 "corroboration_live_ok": False,
                 "dispute_live_ok": False,
@@ -65,21 +75,64 @@ class AcceptanceFlows(LiveVerifier):
             "timings_ms": {},
         }
 
+    def _check_provider_clock(self) -> None:
+        try:
+            self.ledger.check_provider_clock(self.clock())
+        except BudgetExceeded:
+            self.report["checks"]["budget_ok"] = False
+            raise
+
+    def _record_mutation(self, kind: str) -> None:
+        try:
+            self.ledger.record_mutation(kind)
+        except BudgetExceeded:
+            self.report["checks"]["budget_ok"] = False
+            raise
+
+    def _record_infer_write(self) -> None:
+        try:
+            self.ledger.record_infer_write()
+        except BudgetExceeded:
+            self.report["checks"]["budget_ok"] = False
+            raise
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None,
+    ) -> Any:
+        is_cleanup_request = method == "DELETE" or (method == "GET" and path == "/memories")
+        if not is_cleanup_request:
+            self._check_provider_clock()
+        if method == "DELETE":
+            self._record_mutation("delete")
+        response = super()._request(method, path, body=body, query=query)
+        if not is_cleanup_request:
+            self._check_provider_clock()
+        return response
+
     def _infer_add(self, content: str, *, created_at: str) -> str:
         # Budget is checked and charged BEFORE the write, mirroring the
         # ledger's own "every check runs before the action" contract.
-        self.ledger.check_provider_clock(self.clock())
-        self.ledger.record_infer_write()
+        self._check_provider_clock()
+        self._record_infer_write()
         rows = self._add(content, created_at=created_at)
+        self.report["counts"]["created"] += len(rows)
+        for _ in rows[1:]:
+            self._record_infer_write()
+        if len(rows) != 1:
+            raise VerificationError("synthetic infer add must produce exactly one memory")
         memory_id = rows[0].get("id")
         if not isinstance(memory_id, str):
             raise VerificationError("add produced an invalid synthetic memory identifier")
-        self.report["counts"]["created"] += 1
         return memory_id
 
     def _raw_add(self, content: str, *, created_at: str) -> str:
-        self.ledger.check_provider_clock(self.clock())
-        self.ledger.record_mutation("write")
+        self._check_provider_clock()
+        self._record_mutation("write")
         response = self._request(
             "POST",
             "/memories",
@@ -94,10 +147,14 @@ class AcceptanceFlows(LiveVerifier):
         rows = self._results(response)
         if not rows:
             raise VerificationError("raw add produced no result")
+        self.report["counts"]["created"] += len(rows)
+        for _ in rows[1:]:
+            self._record_mutation("write")
+        if len(rows) != 1:
+            raise VerificationError("synthetic raw add must produce exactly one memory")
         memory_id = rows[0].get("id")
         if not isinstance(memory_id, str):
             raise VerificationError("raw add produced an invalid synthetic memory identifier")
-        self.report["counts"]["created"] += 1
         return memory_id
 
     def _supersession_flow(self) -> None:
@@ -178,17 +235,11 @@ class AcceptanceFlows(LiveVerifier):
         self._reversion_flow()
         self._direct_vs_lifecycle_flow()
 
-    def _cleanup(self) -> None:
-        super()._cleanup()
-        # Deletes are charged to the ledger AFTER the fact, from the parent's
-        # already-drained count -- the data-plane cleanup above is unconditional
-        # and must never be gated by ledger bookkeeping. If the mutation budget
-        # is (nearly) exhausted, stop charging rather than let BudgetExceeded
-        # escape run()'s finally block and swallow an already-completed
-        # cleanup and its report: the ledger snapshot then tells the true
-        # story (fewer recorded deletes than cleanup_deleted).
-        for _ in range(self.report["counts"]["cleanup_deleted"]):
-            try:
-                self.ledger.record_mutation("delete")
-            except BudgetExceeded:
-                break
+    def run(self) -> dict[str, Any]:
+        report = super().run()
+        try:
+            self._check_provider_clock()
+        except BudgetExceeded:
+            pass
+        report["ok"] = all(report["checks"].values())
+        return report

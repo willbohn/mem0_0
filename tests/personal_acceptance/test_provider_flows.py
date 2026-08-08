@@ -44,10 +44,14 @@ class FakeProviderAPI:
         break_supersession: bool = False,
         ignore_deletes: bool = False,
         blank_dispute: bool = False,
+        extra_first_add_result: bool = False,
+        clock_state: dict[str, float] | None = None,
     ) -> None:
         self.break_supersession = break_supersession
         self.ignore_deletes = ignore_deletes
         self.blank_dispute = blank_dispute
+        self.extra_first_add_result = extra_first_add_result
+        self.clock_state = clock_state
         self.requests: list[tuple] = []
         self.records: dict[str, dict] = {}
         self.scope: dict[str, str] | None = None
@@ -73,7 +77,13 @@ class FakeProviderAPI:
                 "agent_id": self.scope["agent_id"],
                 "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
             }
-            return self._json({"results": [{"id": memory_id, "event": "ADD"}]})
+            results = [{"id": memory_id, "event": "ADD"}]
+            if self.extra_first_add_result and self._next_id == 2:
+                extra_id = f"pa-{self._next_id}"
+                self._next_id += 1
+                self.records[extra_id] = {**self.records[memory_id], "id": extra_id}
+                results.append({"id": extra_id, "event": "ADD"})
+            return self._json({"results": results})
 
         if method == "POST" and parsed.path == "/search":
             assert body["filters"] == self.scope
@@ -86,7 +96,10 @@ class FakeProviderAPI:
         if method == "GET" and parsed.path == "/memories":
             assert {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"} == self.scope
             top_k = int(parse_qs(parsed.query)["top_k"][-1])
-            return self._json({"results": list(self.records.values())[:top_k]})
+            results = list(self.records.values())[:top_k]
+            if not results and self.clock_state is not None:
+                self.clock_state["now"] = 1011.0
+            return self._json({"results": results})
 
         if method == "DELETE" and parsed.path.startswith("/memories/"):
             if not self.ignore_deletes:
@@ -157,6 +170,7 @@ def test_provider_flows_run_all_five_families_and_charge_the_ledger_exactly(key_
     assert report["checks"] == {
         "auth_file_private": True,
         "scope_complete": True,
+        "budget_ok": True,
         "supersession_live_ok": True,
         "corroboration_live_ok": True,
         "dispute_live_ok": True,
@@ -222,18 +236,8 @@ def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_result
     assert report["checks"]["cleanup_complete"] is True
 
 
-def test_provider_flows_cleanup_delete_charging_never_breaks_report_delivery_under_a_tiny_budget(
-    key_file: Path, monkeypatch
-) -> None:
-    """A near-exhausted mutation budget must degrade gracefully, not crash run().
-
-    ``_cleanup``'s post-hoc ``record_mutation("delete")`` loop runs inside
-    ``run()``'s ``finally`` block, outside the try/except that guards
-    ``_run_flow``. If that loop let ``BudgetExceeded`` escape, run() would
-    raise instead of returning a report even though the real (fake) DELETE
-    requests already succeeded. The tiny budget here is exhausted by writes
-    alone, so every delete-charge attempt must be swallowed.
-    """
+def test_provider_flows_never_delete_past_the_mutation_budget(key_file: Path, monkeypatch) -> None:
+    """A saturated ledger must fail closed before issuing another mutation."""
     monkeypatch.delenv("MEM0_API_KEY", raising=False)
     ledger = BudgetLedger(max_mutations=3, max_infer_writes=48)
     ledger.start_provider_clock(now=0.0)
@@ -243,10 +247,29 @@ def test_provider_flows_cleanup_delete_charging_never_breaks_report_delivery_und
 
     assert isinstance(report, dict)
     assert report["ok"] is False
-    assert report["checks"]["cleanup_complete"] is True
-    assert report["counts"]["cleanup_deleted"] >= 1
-    # The 3-mutation budget is fully consumed by writes; no delete charges fit.
+    assert report["checks"]["budget_ok"] is False
+    assert report["checks"]["cleanup_complete"] is False
+    assert report["counts"]["cleanup_deleted"] == 0
+    assert not any(method == "DELETE" for method, *_ in api.requests)
     assert ledger.snapshot()["mutations"] == 3
+
+
+def test_provider_flows_count_and_reject_multiple_memories_from_one_add(key_file: Path, monkeypatch) -> None:
+    """One synthetic add returning two records must not be accepted as one mutation."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    ledger = BudgetLedger()
+    ledger.start_provider_clock(now=0.0)
+    api = FakeProviderAPI(extra_first_add_result=True)
+
+    report = AcceptanceFlows(ledger=ledger, clock=lambda: 1.0, api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["supersession_live_ok"] is False
+    assert report["counts"]["created"] == 2
+    assert report["counts"]["cleanup_deleted"] == 2
+    assert ledger.snapshot()["infer_writes"] == 2
+    assert ledger.snapshot()["mutations"] == 4
+    assert api.records == {}
 
 
 def test_provider_flows_fail_the_run_without_extending_past_the_wall_clock_cap(key_file: Path, monkeypatch) -> None:
@@ -260,7 +283,42 @@ def test_provider_flows_fail_the_run_without_extending_past_the_wall_clock_cap(k
 
     assert report["ok"] is False
     assert report["checks"]["cleanup_complete"] is True
+    assert report["checks"]["budget_ok"] is False
     assert ledger.snapshot()["provider_elapsed_seconds"] > 10.0
+
+
+def test_provider_flows_check_the_wall_clock_after_cleanup(key_file: Path, monkeypatch) -> None:
+    """A run crossing the cap after its final write must not report success."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    ledger = BudgetLedger(provider_wall_clock_seconds=10.0)
+    ledger.start_provider_clock(now=1000.0)
+    clock_state = {"now": 1000.0}
+    api = FakeProviderAPI(clock_state=clock_state)
+
+    report = AcceptanceFlows(
+        ledger=ledger,
+        clock=lambda: clock_state["now"],
+        api_key_file=key_file,
+        opener=api,
+        timeout=1,
+    ).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["budget_ok"] is False
+    assert ledger.snapshot()["provider_elapsed_seconds"] > 10.0
+
+
+def test_provider_flows_reject_noncanonical_loopback_endpoint(key_file: Path, monkeypatch) -> None:
+    """Provider results and receipt reconciliation must refer to the same shadow."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+
+    with pytest.raises(ConfigurationError, match="canonical shadow endpoint"):
+        AcceptanceFlows(
+            ledger=BudgetLedger(),
+            api_url="http://127.0.0.1:29999",
+            api_key_file=key_file,
+            opener=FakeProviderAPI(),
+        )
 
 
 def test_provider_flows_reject_inline_api_key_env(key_file: Path, monkeypatch) -> None:

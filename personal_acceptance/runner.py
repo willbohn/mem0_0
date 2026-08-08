@@ -38,18 +38,20 @@ from personal_acceptance.provider_flows import AcceptanceFlows
 
 SHADOW_POSTGRES_CONTAINER = "mem0_0-arch-shadow-postgres-1"
 DEFAULT_OUTPUT_PATH = Path(".personal-acceptance/report.json")
-_PYTEST_SUMMARY_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|error|errors)\b")
+_PYTEST_SUMMARY_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|error|errors|skipped|xfailed|xpassed|deselected)\b")
 
 
-def _parse_pytest_summary_counts(stdout: str) -> tuple[int, int]:
-    """Extract only pass/fail counts from a pytest ``-q`` summary line, never test names or content."""
-    passed = failed = 0
+def _parse_pytest_summary_counts(stdout: str) -> tuple[int, int, int]:
+    """Extract scalar outcome counts from pytest's summary without retaining test names or content."""
+    passed = failed = skipped = 0
     for count, word in _PYTEST_SUMMARY_COUNT_RE.findall(stdout or ""):
         if word == "passed":
             passed += int(count)
+        elif word in {"skipped", "xfailed", "xpassed", "deselected"}:
+            skipped += int(count)
         else:
             failed += int(count)
-    return passed, failed
+    return passed, failed, skipped
 
 
 def run_deterministic(
@@ -74,6 +76,7 @@ def run_deterministic(
         "pytest_nodes": 0,
         "pytest_passed": 0,
         "pytest_failed": 0,
+        "pytest_skipped": 0,
         "jest_skipped": 0,
     }
     timings_ms: dict[str, float] = {}
@@ -89,11 +92,12 @@ def run_deterministic(
             text=True,
         )
         timings_ms["pytest_ms"] = round((time.monotonic() - started) * 1000, 3)
-        passed, failed = _parse_pytest_summary_counts(getattr(result, "stdout", "") or "")
+        passed, failed, skipped = _parse_pytest_summary_counts(getattr(result, "stdout", "") or "")
         counts["pytest_passed"] = passed
         counts["pytest_failed"] = failed
+        counts["pytest_skipped"] = skipped
 
-        if result.returncode == 0:
+        if result.returncode == 0 and failed == 0 and skipped == 0 and passed >= len(all_node_ids):
             for family in node_families:
                 checks[family.name] = True
         else:
@@ -103,7 +107,15 @@ def run_deterministic(
                     capture_output=True,
                     text=True,
                 )
-                checks[family.name] = family_result.returncode == 0
+                family_passed, family_failed, family_skipped = _parse_pytest_summary_counts(
+                    getattr(family_result, "stdout", "") or ""
+                )
+                checks[family.name] = (
+                    family_result.returncode == 0
+                    and family_failed == 0
+                    and family_skipped == 0
+                    and family_passed >= len(family.pytest_nodes)
+                )
 
     if jest_families:
         if skip_jest:
