@@ -4,6 +4,19 @@ Last refreshed: 2026-08-08 JST
 
 This handover is for the next agent continuing the state-aware lifecycle, benchmark, and local deployment work in `/home/will/Documents/CodingWorkspaces/mem0_0`. Treat it as a checkpoint, not as authority over the current repository or runtime: re-run the content-free checks below before changing anything.
 
+## Canonical continuation pointers
+
+- **Living status and task ledger:**
+  `docs/designs/mem0-0-state-aware-status.md`
+- **Forward operational plan:**
+  `docs/superpowers/plans/2026-08-08-state-aware-operational-completion.md`
+- **Current mode:** intentionally paused at a safe, pushed draft checkpoint.
+- **Next bounded task:** `SA-02`, a read-only Git/PR/runtime re-attestation.
+
+Update the living ledger as work proceeds. This handover remains the detailed
+technical and historical record and should be refreshed only when substantive
+facts, evidence, or gates change.
+
 ## Read first
 
 1. Read the repository `AGENTS.md` in full.
@@ -19,11 +32,21 @@ This handover is for the next agent continuing the state-aware lifecycle, benchm
 - Implementation candidate: `75021d0a616e7939eb58086f7a46c9dd86433a6b`
 - Bounded personal-acceptance implementation head:
   `7c8d60dc268763e0c2c4e605db763f2df67ed9ec`
+- Published documentation and acceptance checkpoint:
+  `b86389bc53ed72cba5c9161813f5233af8bd1ff9`
 - Candidate source-tree SHA-256: `33fb027e79dd8335ebeb01b90d6c655f2941f0bff75ff757caef62b57851832c`
 - Base branch at the checkpoint: local `main` at `50bdaaea`, tracking `origin/main`
-- The feature branch tracks `origin/feat/state-aware-memory-python`, whose tip is `32d5d321`. Everything through `32d5d321`, including the deployed implementation candidate, is pushed; after this refresh the branch is ahead of origin by 48 unpushed commits and behind by 0. The unpushed history contains the approved stabilization design, plan, implementation, and handover commits plus the bounded personal-acceptance plan and implementation recorded below.
+- The feature branch tracks `origin/feat/state-aware-memory-python`. The exact
+  verified checkpoint `b86389bc` was pushed without force on 2026-08-08, and
+  draft PR #1 was opened against the fork's `main` branch:
+  <https://github.com/willbohn/mem0_0/pull/1>.
+- Documentation-only commits after `b86389bc` may advance the branch and PR
+  without changing the tested runtime target. On resume, require local HEAD,
+  the tracking ref, and the PR head to match before relying on this checkpoint.
 - Remote fork: `origin` (`willbohn/mem0_0`); upstream project: `upstream` (`mem0ai/mem0`). The upstream comparison revision pinned by the stabilization design is `mem0ai/mem0` `main` at `4a0a9a92`.
-- Do not push without new explicit approval for the exact revision being pushed. Never force-push.
+- Never force-push. Keep draft-PR documentation updates scoped and verify the
+  exact remote target before pushing. Code, runtime, benchmark, merge, and
+  cutover changes retain their separate approval gates.
 
 The handover documentation commit, if present above the implementation candidate, is documentation-only. The currently running shadow image is intentionally attested to the implementation candidate, not to a later documentation-only commit.
 
@@ -383,8 +406,9 @@ installed-harness change, CI/CD change, benchmark, cutover, or push occurred.
 Remaining gates are unchanged: the bounded suite is not official benchmark
 acceptance; the official benchmarks remain deferred and unclaimed; the
 deployed shadow has not been refreshed to the newer code; OMP behavior remains
-unverified; cutover is blocked; and pushing requires explicit approval for the
-exact SHA.
+unverified; cutover is blocked. The verified checkpoint has now been pushed as
+draft PR #1; subsequent code changes still require complete re-verification
+before any readiness or merge claim.
 
 ## Benchmark status and hard gate
 
@@ -413,19 +437,15 @@ Acceptance still requires:
 
 ## Recommended continuation order
 
-1. Re-attest Git and runtime state using the content-free commands above.
-2. Stabilization and bounded personal-acceptance implementation are complete
-   and deterministically verified. The next optional operational sequence is
-   an approved shadow refresh to the tested bounded-write code with fresh
-   source attestation, then one approved live `provider` or `full` acceptance
-   run against that canonical shadow, followed by content-free receipt
-   reconciliation.
-3. Present a concrete official-benchmark compute/cost/time proposal to Will. Extra paid compute or a changed acceptance scope requires an explicit decision.
-4. Run baseline, candidate-legacy, and candidate state-aware arms with identical pinned models, prompts, seeds, budgets, and isolated stores. Preserve manifests and summarized metrics only.
-5. Evaluate every acceptance gate. If any gate fails, diagnose and iterate without touching the migrated legacy data.
-6. Run the full Python, server, deployment, and TypeScript suites again, then use fresh verifier and critic agents.
-7. Obtain approval for the exact final SHA and push the feature branch without force.
-8. Only after all gates pass, take a new quiesced encrypted snapshot, reconcile it, exercise the cutover recorder and rollback drill, retarget backed-up harness configs atomically, and disable but retain the old unit.
+The canonical ordered work now lives in
+`docs/designs/mem0-0-state-aware-status.md`, with executable task details in
+`docs/superpowers/plans/2026-08-08-state-aware-operational-completion.md`.
+In brief: re-attest read-only; separately approve and refresh the shadow;
+separately approve and run bounded provider acceptance with reconciliation;
+decide the official benchmark execution envelope; execute and evaluate the
+matrix; complete applicable OMP behavioral validation; freeze and independently
+verify the merge candidate; then decide merge and production cutover as two
+separate gates.
 
 ## Commands that remain intentionally blocked
 
@@ -439,6 +459,10 @@ Do not manufacture a cutover record or bypass those gates. Production-port chang
 
 ## Key documentation
 
+- `docs/designs/mem0-0-state-aware-status.md` — canonical living status,
+  ordered task ledger, update protocol, and resume checklist
+- `docs/superpowers/plans/2026-08-08-state-aware-operational-completion.md` —
+  executable forward plan from re-attestation through cutover
 - `docs/designs/mem0-0-state-aware-rollout.md` — approved rollout plan and invariants
 - `docs/superpowers/specs/2026-08-07-mem0-0-stabilization-and-omp-design.md` — approved and amended stabilization and OMP compatibility design
 - `docs/superpowers/plans/2026-08-07-mem0-0-stabilization-implementation.md` — executed stabilization implementation plan
