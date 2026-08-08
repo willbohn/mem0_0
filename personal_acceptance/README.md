@@ -50,7 +50,7 @@ this section.
 
 The roster is locked at 21 families — 16 deterministic + 5 provider-backed —
 inside the 24-family budget, leaving 3 slots of deliberate headroom
-(`personal_acceptance/families.py:22-44`). Deterministic families never
+(`personal_acceptance/families.py:22-92`). Deterministic families never
 touch the shadow REST endpoint and spend no `infer=true` or mutation budget;
 only the five provider families spend budget, and only they are allowed to
 (`PROVIDER_ALLOWED`, `personal_acceptance/families.py:7-9`).
@@ -80,12 +80,12 @@ only the five provider families spend budget, and only they are allowed to
 
 | Family | Planned `infer=true` writes | Planned mutations |
 |---|---|---|
-| `supersession_live` | 2 | 4 |
-| `corroboration_live` | 2 | 4 |
-| `dispute_live` | 2 | 4 |
-| `reversion_live` | 3 | 6 |
-| `direct_vs_lifecycle_live` | 1 | 4 |
-| **Total** | **10 / 48** | **22 / 120** |
+| `supersession_live` | 2 | 6 |
+| `corroboration_live` | 2 | 6 |
+| `dispute_live` | 2 | 6 |
+| `reversion_live` | 3 | 9 |
+| `direct_vs_lifecycle_live` | 1 | 5 |
+| **Total** | **10 / 48** | **32 / 120** |
 
 These totals are pinned by `test_planned_budgets_fit_the_ledger`
 (`tests/personal_acceptance/test_families.py`), which asserts the sum of
@@ -95,6 +95,18 @@ deliberate. Provider families run through `AcceptanceFlows`
 (`personal_acceptance/provider_flows.py`), a `LiveVerifier` subclass that
 drives each flow inside one disposable, uniquely-scoped identity and charges
 every write and cleanup delete to the ledger.
+
+The provider runner fails closed: it reserves the complete planned write and
+cleanup budget before issuing any provider request, requires the shadow's
+OpenAPI schema to advertise the positive `max_extractions` and `max_mutations`
+contracts, sends `max_extractions=1` and `max_mutations=2` on every inferred
+add, charges that conservative two-mutation ceiling before the request, counts
+every returned memory, and requires each synthetic add to return exactly one
+memory. It also checks the
+provider clock before and after non-cleanup requests and again at the end, and
+includes both `budget_ok` and `bounded_write_contract` in the report checks.
+Cleanup still runs after a wall-clock overrun, and its reserved capacity keeps
+it inside the mutation cap.
 
 ## Running the suite
 
@@ -112,12 +124,13 @@ Full tier (deterministic + provider, requires a reconciliation receipt):
 
 ```bash
 uvx hatch run dev_py_3_12:python -m personal_acceptance.runner \
-  --tier full --receipt <receipt> [--api-url http://127.0.0.1:28889]
+  --tier full --receipt <receipt>
 ```
 
 `--tier provider` runs only the five provider families and also requires
 `--receipt`. Other flags (`personal_acceptance/runner.py:236-244`):
-`--api-url` (default `http://127.0.0.1:28889`), `--api-key-file` (default
+`--api-url` (fixed to the canonical default `http://127.0.0.1:28889`;
+alternate values are rejected), `--api-key-file` (default
 `/home/will/.config/mem0_0-arch/bridge-api-key`), `--history-db`, `--home`
 (default `$HOME`), `--output` (default `.personal-acceptance/report.json`,
 gitignored).
@@ -131,7 +144,9 @@ otherwise.
 **The provider tier has not yet had a live run in this repository.**
 Running it against the shadow deployment is a separately approved
 operational step — first live provider-tier run pending separate
-operational approval.
+operational approval. The currently deployed shadow predates the bounded-write
+contracts, so its OpenAPI preflight will fail safely before any write until a
+separately approved shadow refresh deploys the tested code.
 
 ## Cadence
 
@@ -155,7 +170,9 @@ whose top-level keys are **exactly** `schema_version`, `acceptance_class`,
 - `tier` — the tier that ran (`"deterministic"`, `"provider"`, or `"full"`).
 - `checks` — per-family `bool` pass/fail.
 - `counts` — `int` counts (e.g. `pytest_passed`, `pytest_failed`,
-  `jest_skipped`, `created`, `cleanup_deleted`).
+  `pytest_skipped`, `jest_skipped`, `created`, `cleanup_deleted`). A skipped,
+  xfailed, xpassed, or deselected required pytest node fails its family rather
+  than being accepted as a pass.
 - `timings_ms` — `float` subprocess/flow timings.
 - `budget` — the ledger snapshot (`personal_acceptance/budget.py:70-76`):
   `families`, `mutations`, `infer_writes` (all `int`), and
@@ -189,10 +206,11 @@ with a report instead of crashing. `checks["reconciled"]` participates in
   are forbidden; use a private key file`
   (`deployment/mem0_0_arch/live_verify.py:94-95`). Unset it before running
   the provider or full tier.
-- **Loopback only.** `--api-url` must be a credential-free `http` URL with
-  hostname in `{127.0.0.1, localhost, ::1}` and an explicit port — no
-  username, password, query, or fragment
-  (`deployment/mem0_0_arch/live_verify.py:101-111`).
+- **Canonical shadow only.** `--api-url` must remain exactly
+  `http://127.0.0.1:28889`. Other loopback endpoints are rejected so provider
+  behavior and receipt reconciliation cannot accidentally describe different
+  stores. The inherited verifier also rejects credentials, queries, and
+  fragments (`deployment/mem0_0_arch/live_verify.py:101-111`).
 - **Jest needs `mem0-ts/node_modules`.** The `scope_ts` family shells out to
   `pnpm run test -- <pattern>` with `cwd=mem0-ts`; if dependencies haven't
   been installed there (`pnpm install` in `mem0-ts/`), that subprocess

@@ -300,6 +300,64 @@ class TestAddInfer:
         assert "infer" not in kwargs
 
 
+class TestAddMaxExtractions:
+    """Verify that the fail-closed inferred-memory cardinality limit is validated and forwarded."""
+
+    def test_max_extractions_forwarded(self, client, mock_memory):
+        resp = client.post(
+            "/memories",
+            json={
+                "messages": [{"role": "user", "content": "I like pizza"}],
+                "user_id": "u1",
+                "max_extractions": 1,
+            },
+        )
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.add.call_args
+        assert kwargs["max_extractions"] == 1
+
+    def test_max_extractions_must_be_positive(self, client, mock_memory):
+        resp = client.post(
+            "/memories",
+            json={
+                "messages": [{"role": "user", "content": "I like pizza"}],
+                "user_id": "u1",
+                "max_extractions": 0,
+            },
+        )
+        assert resp.status_code == 422
+        mock_memory.add.assert_not_called()
+
+
+class TestAddMaxMutations:
+    """Verify the pre-persistence memory-mutation ceiling is validated and forwarded."""
+
+    def test_max_mutations_forwarded(self, client, mock_memory):
+        resp = client.post(
+            "/memories",
+            json={
+                "messages": [{"role": "user", "content": "I like pizza"}],
+                "user_id": "u1",
+                "max_mutations": 2,
+            },
+        )
+        assert resp.status_code == 200
+        _, kwargs = mock_memory.add.call_args
+        assert kwargs["max_mutations"] == 2
+
+    def test_max_mutations_must_be_positive(self, client, mock_memory):
+        resp = client.post(
+            "/memories",
+            json={
+                "messages": [{"role": "user", "content": "I like pizza"}],
+                "user_id": "u1",
+                "max_mutations": 0,
+            },
+        )
+        assert resp.status_code == 422
+        mock_memory.add.assert_not_called()
+
+
 # ===========================================================================
 # MemoryCreate: memory_type parameter
 # ===========================================================================
@@ -494,6 +552,18 @@ class TestOpenAPISchema:
         schema = client.get("/openapi.json").json()
         add_props = schema["components"]["schemas"]["MemoryCreate"]["properties"]
         assert "infer" in add_props
+
+    def test_add_schema_includes_positive_max_extractions(self, client):
+        schema = client.get("/openapi.json").json()
+        prop = schema["components"]["schemas"]["MemoryCreate"]["properties"]["max_extractions"]
+        variants = [prop, *prop.get("anyOf", [])]
+        assert any(item.get("type") == "integer" and item.get("minimum") == 1 for item in variants)
+
+    def test_add_schema_includes_positive_max_mutations(self, client):
+        schema = client.get("/openapi.json").json()
+        prop = schema["components"]["schemas"]["MemoryCreate"]["properties"]["max_mutations"]
+        variants = [prop, *prop.get("anyOf", [])]
+        assert any(item.get("type") == "integer" and item.get("minimum") == 1 for item in variants)
 
     def test_add_schema_includes_memory_type(self, client):
         schema = client.get("/openapi.json").json()

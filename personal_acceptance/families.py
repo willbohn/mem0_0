@@ -84,11 +84,11 @@ FAMILIES: tuple = (
         "deterministic",
         ("tests/personal_acceptance/test_recall_families.py::test_context_size_family",),
     ),
-    Family("supersession_live", "provider", planned_infer_writes=2, planned_mutations=4),
-    Family("corroboration_live", "provider", planned_infer_writes=2, planned_mutations=4),
-    Family("dispute_live", "provider", planned_infer_writes=2, planned_mutations=4),
-    Family("reversion_live", "provider", planned_infer_writes=3, planned_mutations=6),
-    Family("direct_vs_lifecycle_live", "provider", planned_infer_writes=1, planned_mutations=4),
+    Family("supersession_live", "provider", planned_infer_writes=2, planned_mutations=6),
+    Family("corroboration_live", "provider", planned_infer_writes=2, planned_mutations=6),
+    Family("dispute_live", "provider", planned_infer_writes=2, planned_mutations=6),
+    Family("reversion_live", "provider", planned_infer_writes=3, planned_mutations=9),
+    Family("direct_vs_lifecycle_live", "provider", planned_infer_writes=1, planned_mutations=5),
 )
 
 

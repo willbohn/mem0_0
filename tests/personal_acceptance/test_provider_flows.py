@@ -46,12 +46,14 @@ class FakeProviderAPI:
         blank_dispute: bool = False,
         extra_first_add_result: bool = False,
         clock_state: dict[str, float] | None = None,
+        advertise_bounded_writes: bool = True,
     ) -> None:
         self.break_supersession = break_supersession
         self.ignore_deletes = ignore_deletes
         self.blank_dispute = blank_dispute
         self.extra_first_add_result = extra_first_add_result
         self.clock_state = clock_state
+        self.advertise_bounded_writes = advertise_bounded_writes
         self.requests: list[tuple] = []
         self.records: dict[str, dict] = {}
         self.scope: dict[str, str] | None = None
@@ -64,7 +66,21 @@ class FakeProviderAPI:
         body: dict = json.loads(request.data) if request.data else {}
         self.requests.append((method, parsed.path, parse_qs(parsed.query), body))
 
+        if method == "GET" and parsed.path == "/openapi.json":
+            properties = (
+                {
+                    "max_extractions": {"anyOf": [{"minimum": 1, "type": "integer"}, {"type": "null"}]},
+                    "max_mutations": {"anyOf": [{"minimum": 1, "type": "integer"}, {"type": "null"}]},
+                }
+                if self.advertise_bounded_writes
+                else {}
+            )
+            return self._json({"components": {"schemas": {"MemoryCreate": {"properties": properties}}}})
+
         if method == "POST" and parsed.path == "/memories":
+            if body["infer"] is True:
+                assert body["max_extractions"] == 1
+                assert body["max_mutations"] == 2
             if self.scope is None:
                 self.scope = {key: body["metadata"][key] for key in REQUIRED_SCOPE}
             memory_id = f"pa-{self._next_id}"
@@ -94,7 +110,10 @@ class FakeProviderAPI:
             return self._json({"scanned": len(self.records), "summary": {"disputed": 2}})
 
         if method == "GET" and parsed.path == "/memories":
-            assert {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"} == self.scope
+            query_scope = {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"}
+            if self.scope is None:
+                self.scope = query_scope
+            assert query_scope == self.scope
             top_k = int(parse_qs(parsed.query)["top_k"][-1])
             results = list(self.records.values())[:top_k]
             if not results and self.clock_state is not None:
@@ -171,6 +190,7 @@ def test_provider_flows_run_all_five_families_and_charge_the_ledger_exactly(key_
         "auth_file_private": True,
         "scope_complete": True,
         "budget_ok": True,
+        "bounded_write_contract": True,
         "supersession_live_ok": True,
         "corroboration_live_ok": True,
         "dispute_live_ok": True,
@@ -186,7 +206,7 @@ def test_provider_flows_run_all_five_families_and_charge_the_ledger_exactly(key_
 
     snapshot = ledger.snapshot()
     assert snapshot["infer_writes"] == 10
-    assert snapshot["mutations"] == 22  # 10 infer writes + 1 raw write + 11 deletes
+    assert snapshot["mutations"] == 32  # 20 inferred mutation ceiling + 1 raw write + 11 deletes
     assert api.records == {}
     _assert_output_scalars_are_safe(report)
 
@@ -208,7 +228,7 @@ def test_provider_flows_fail_closed_when_supersession_search_returns_the_superse
     assert report["checks"]["cleanup_complete"] is True
     assert report["counts"]["cleanup_discovered"] == 2
     assert report["counts"]["cleanup_deleted"] == 2
-    assert ledger.snapshot()["mutations"] == 4  # 2 infer writes + 2 deletes
+    assert ledger.snapshot()["mutations"] == 6  # 2 inferred calls x 2-mutation ceiling + 2 deletes
 
 
 def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_results(key_file: Path, monkeypatch) -> None:
@@ -237,7 +257,7 @@ def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_result
 
 
 def test_provider_flows_never_delete_past_the_mutation_budget(key_file: Path, monkeypatch) -> None:
-    """A saturated ledger must fail closed before issuing another mutation."""
+    """An undersized budget must reject the plan before creating anything."""
     monkeypatch.delenv("MEM0_API_KEY", raising=False)
     ledger = BudgetLedger(max_mutations=3, max_infer_writes=48)
     ledger.start_provider_clock(now=0.0)
@@ -248,10 +268,27 @@ def test_provider_flows_never_delete_past_the_mutation_budget(key_file: Path, mo
     assert isinstance(report, dict)
     assert report["ok"] is False
     assert report["checks"]["budget_ok"] is False
-    assert report["checks"]["cleanup_complete"] is False
+    assert report["checks"]["cleanup_complete"] is True
     assert report["counts"]["cleanup_deleted"] == 0
+    assert not any(method == "POST" and path.endswith("/memories") for method, path, *_ in api.requests)
     assert not any(method == "DELETE" for method, *_ in api.requests)
-    assert ledger.snapshot()["mutations"] == 3
+    assert ledger.snapshot()["mutations"] == 0
+
+
+def test_provider_flows_reject_old_shadow_before_any_write(key_file: Path, monkeypatch) -> None:
+    """Unknown request fields must not let an older server bypass the cardinality cap."""
+    monkeypatch.delenv("MEM0_API_KEY", raising=False)
+    ledger = BudgetLedger()
+    ledger.start_provider_clock(now=0.0)
+    api = FakeProviderAPI(advertise_bounded_writes=False)
+
+    report = AcceptanceFlows(ledger=ledger, clock=lambda: 1.0, api_key_file=key_file, opener=api, timeout=1).run()
+
+    assert report["ok"] is False
+    assert report["checks"]["bounded_write_contract"] is False
+    assert report["checks"]["cleanup_complete"] is True
+    assert not any(method == "POST" and path == "/memories" for method, path, *_ in api.requests)
+    assert ledger.snapshot()["mutations"] == 0
 
 
 def test_provider_flows_count_and_reject_multiple_memories_from_one_add(key_file: Path, monkeypatch) -> None:
@@ -267,7 +304,7 @@ def test_provider_flows_count_and_reject_multiple_memories_from_one_add(key_file
     assert report["checks"]["supersession_live_ok"] is False
     assert report["counts"]["created"] == 2
     assert report["counts"]["cleanup_deleted"] == 2
-    assert ledger.snapshot()["infer_writes"] == 2
+    assert ledger.snapshot()["infer_writes"] == 1
     assert ledger.snapshot()["mutations"] == 4
     assert api.records == {}
 

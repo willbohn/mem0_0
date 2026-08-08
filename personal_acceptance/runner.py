@@ -144,8 +144,12 @@ def run_provider(families: Iterable[Family], ledger: BudgetLedger, **flow_kwargs
     must already have been called (``build_report`` does this before invoking
     ``run_provider``) -- without it the wall-clock cap silently never fires.
     """
-    del families  # provider scenario coverage is intrinsic to AcceptanceFlows; kept for a uniform run_* signature
-    flows = AcceptanceFlows(ledger=ledger, **flow_kwargs)
+    families = tuple(families)
+    flows = AcceptanceFlows(
+        ledger=ledger,
+        planned_mutations=sum(family.planned_mutations for family in families),
+        **flow_kwargs,
+    )
     report = flows.run()
     return {
         "checks": dict(report["checks"]),

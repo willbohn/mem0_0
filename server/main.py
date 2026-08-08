@@ -206,6 +206,16 @@ class MemoryCreate(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     expiration_date: Optional[str] = Field(None, description="Expiration date in YYYY-MM-DD format.")
     infer: Optional[bool] = Field(None, description="Whether to extract facts from messages. Defaults to True.")
+    max_extractions: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Reject inferred batches larger than this limit before persistence.",
+    )
+    max_mutations: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Reject a memory write plan larger than this limit before persistence.",
+    )
     memory_type: Optional[str] = Field(None, description="Type of memory to store (e.g. 'core').")
     prompt: Optional[str] = Field(None, description="Custom prompt to use for fact extraction.")
 

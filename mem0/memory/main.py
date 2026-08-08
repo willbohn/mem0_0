@@ -324,6 +324,41 @@ def _validate_quality_filters(filters: Optional[Dict[str, Any]], limit: int) -> 
     return effective_filters
 
 
+def _validate_max_extractions(max_extractions: Optional[int]) -> None:
+    if max_extractions is None:
+        return
+    if isinstance(max_extractions, bool) or not isinstance(max_extractions, int) or max_extractions < 1:
+        raise Mem0ValidationError(
+            message="max_extractions must be a positive integer",
+            error_code="VALIDATION_004",
+            details={"provided_type": type(max_extractions).__name__},
+            suggestion="Pass a positive integer or omit max_extractions.",
+        )
+
+
+def _validate_max_mutations(max_mutations: Optional[int]) -> None:
+    if max_mutations is None:
+        return
+    if isinstance(max_mutations, bool) or not isinstance(max_mutations, int) or max_mutations < 1:
+        raise Mem0ValidationError(
+            message="max_mutations must be a positive integer",
+            error_code="VALIDATION_005",
+            details={"provided_type": type(max_mutations).__name__},
+            suggestion="Pass a positive integer or omit max_mutations.",
+        )
+
+
+def _enforce_max_mutations(max_mutations: Optional[int], planned_mutations: int) -> None:
+    _validate_max_mutations(max_mutations)
+    if max_mutations is not None and planned_mutations > max_mutations:
+        raise Mem0ValidationError(
+            message=f"memory write plan exceeds max_mutations={max_mutations}",
+            error_code="VALIDATION_005",
+            details={"limit": max_mutations, "planned": planned_mutations},
+            suggestion="Narrow the input or increase max_mutations.",
+        )
+
+
 def _indexed_non_system_messages(messages):
     """Expose only evidence-eligible messages to extraction while retaining original indexes."""
     return [
@@ -1039,6 +1074,8 @@ class Memory(MemoryBase):
         timestamp: Optional[Any] = None,
         expiration_date: Optional[Any] = None,
         infer: bool = True,
+        max_extractions: Optional[int] = None,
+        max_mutations: Optional[int] = None,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
     ):
@@ -1061,6 +1098,10 @@ class Memory(MemoryBase):
             infer (bool, optional): If True (default), an LLM is used to extract key facts from
                 'messages' and decide whether to add, update, or delete related memories.
                 If False, 'messages' are added as raw memories directly.
+            max_extractions (int, optional): Reject an inferred batch larger than this positive
+                limit before embedding or persistence. Defaults to None.
+            max_mutations (int, optional): Reject a memory insert/update plan larger than this
+                positive limit before persistence. Defaults to None.
             memory_type (str, optional): Specifies the type of memory. Currently, only
                 `MemoryType.PROCEDURAL.value` ("procedural_memory") is explicitly handled for
                 creating procedural memories (typically requires 'agent_id'). Otherwise, memories
@@ -1082,6 +1123,8 @@ class Memory(MemoryBase):
         """
         if timestamp is not None:
             raise ValueError(get_temporal_feature_error_message("sync", "add", "timestamp"))
+        _validate_max_extractions(max_extractions)
+        _validate_max_mutations(max_mutations)
 
         normalized_expiration_date = _normalize_expiration_date(expiration_date)
         temporal_usage_notice = detect_temporal_usage_from_metadata(metadata)
@@ -1134,7 +1177,14 @@ class Memory(MemoryBase):
 
         stats: Dict[str, Any] = {}
         vector_store_result = self._add_to_vector_store(
-            messages, processed_metadata, effective_filters, infer, prompt=prompt, stats=stats
+            messages,
+            processed_metadata,
+            effective_filters,
+            infer,
+            prompt=prompt,
+            stats=stats,
+            max_extractions=max_extractions,
+            max_mutations=max_mutations,
         )
         scale_threshold_notice = detect_scale_threshold_from_add_result(self, vector_store_result)
         if temporal_usage_notice:
@@ -1148,7 +1198,17 @@ class Memory(MemoryBase):
             response["skipped_invalid_extractions"] = stats["skipped_invalid_extractions"]
         return response
 
-    def _add_to_vector_store(self, messages, metadata, filters, infer, prompt=None, stats: Optional[Dict[str, Any]] = None):
+    def _add_to_vector_store(
+        self,
+        messages,
+        metadata,
+        filters,
+        infer,
+        prompt=None,
+        stats: Optional[Dict[str, Any]] = None,
+        max_extractions: Optional[int] = None,
+        max_mutations: Optional[int] = None,
+    ):
         if not infer:
             prepared = []
             for message_index, message_dict in enumerate(messages):
@@ -1220,6 +1280,7 @@ class Memory(MemoryBase):
                     }
                 )
 
+            _enforce_max_mutations(max_mutations, len(records))
             if not records:
                 return []
             ids = [record[0] for record in records]
@@ -1344,6 +1405,15 @@ class Memory(MemoryBase):
             ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
+        if max_extractions is not None:
+            _validate_max_extractions(max_extractions)
+            if len(extracted_memories) > max_extractions:
+                raise Mem0ValidationError(
+                    message=f"inferred batch exceeds max_extractions={max_extractions}",
+                    error_code="VALIDATION_004",
+                    details={"limit": max_extractions, "extracted": len(extracted_memories)},
+                    suggestion="Narrow the input or increase max_extractions.",
+                )
         if stats is not None and skipped_invalid:
             stats["skipped_invalid_extractions"] = skipped_invalid
 
@@ -1519,6 +1589,7 @@ class Memory(MemoryBase):
             if state_key:
                 lifecycle_candidates.append({"id": memory_id, "payload": deepcopy(mem_metadata)})
 
+        _enforce_max_mutations(max_mutations, len(records) + len(predecessor_updates))
         if not records:
             applied_updates = []
             try:
@@ -3246,6 +3317,8 @@ class AsyncMemory(MemoryBase):
         timestamp: Optional[Any] = None,
         expiration_date: Optional[Any] = None,
         infer: bool = True,
+        max_extractions: Optional[int] = None,
+        max_mutations: Optional[int] = None,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
         llm=None,
@@ -3263,6 +3336,10 @@ class AsyncMemory(MemoryBase):
             expiration_date (Any, optional): Date in YYYY-MM-DD format. Expired memories are hidden
                 from search and get_all unless show_expired is True.
             infer (bool, optional): Whether to infer the memories. Defaults to True.
+            max_extractions (int, optional): Reject an inferred batch larger than this positive
+                limit before embedding or persistence. Defaults to None.
+            max_mutations (int, optional): Reject a memory insert/update plan larger than this
+                positive limit before persistence. Defaults to None.
             memory_type (str, optional): Type of memory to create. Defaults to None.
                                          Pass "procedural_memory" to create procedural memories.
             prompt (str, optional): Prompt to use for the memory creation. Defaults to None.
@@ -3272,6 +3349,8 @@ class AsyncMemory(MemoryBase):
         """
         if timestamp is not None:
             raise ValueError(await get_temporal_feature_error_message_async("async", "add", "timestamp"))
+        _validate_max_extractions(max_extractions)
+        _validate_max_mutations(max_mutations)
 
         normalized_expiration_date = _normalize_expiration_date(expiration_date)
         temporal_usage_notice = detect_temporal_usage_from_metadata(metadata)
@@ -3320,9 +3399,18 @@ class AsyncMemory(MemoryBase):
 
         stats: Dict[str, Any] = {}
         vector_store_result = await self._add_to_vector_store(
-            messages, processed_metadata, effective_filters, infer, prompt=prompt, stats=stats
+            messages,
+            processed_metadata,
+            effective_filters,
+            infer,
+            prompt=prompt,
+            stats=stats,
+            max_extractions=max_extractions,
+            max_mutations=max_mutations,
         )
-        scale_threshold_notice = await asyncio.to_thread(detect_scale_threshold_from_add_result, self, vector_store_result)
+        scale_threshold_notice = await asyncio.to_thread(
+            detect_scale_threshold_from_add_result, self, vector_store_result
+        )
         if temporal_usage_notice:
             await display_temporal_usage_notice_async(self, "async", "add", *temporal_usage_notice)
         elif scale_threshold_notice:
@@ -3342,6 +3430,8 @@ class AsyncMemory(MemoryBase):
         infer: bool,
         prompt: Optional[str] = None,
         stats: Optional[Dict[str, Any]] = None,
+        max_extractions: Optional[int] = None,
+        max_mutations: Optional[int] = None,
     ):
         if not infer:
             prepared = []
@@ -3416,6 +3506,7 @@ class AsyncMemory(MemoryBase):
                     }
                 )
 
+            _enforce_max_mutations(max_mutations, len(records))
             if not records:
                 return []
             ids = [record[0] for record in records]
@@ -3542,6 +3633,15 @@ class AsyncMemory(MemoryBase):
             ]
             grounded_memories.append({**extracted, "_mem0_lifecycle": lifecycle_metadata})
         extracted_memories = grounded_memories
+        if max_extractions is not None:
+            _validate_max_extractions(max_extractions)
+            if len(extracted_memories) > max_extractions:
+                raise Mem0ValidationError(
+                    message=f"inferred batch exceeds max_extractions={max_extractions}",
+                    error_code="VALIDATION_004",
+                    details={"limit": max_extractions, "extracted": len(extracted_memories)},
+                    suggestion="Narrow the input or increase max_extractions.",
+                )
         if stats is not None and skipped_invalid:
             stats["skipped_invalid_extractions"] = skipped_invalid
 
@@ -3715,6 +3815,7 @@ class AsyncMemory(MemoryBase):
             if state_key:
                 lifecycle_candidates.append({"id": memory_id, "payload": deepcopy(mem_metadata)})
 
+        _enforce_max_mutations(max_mutations, len(records) + len(predecessor_updates))
         if not records:
             applied_updates = []
             try:

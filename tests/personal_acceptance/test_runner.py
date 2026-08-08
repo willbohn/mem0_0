@@ -70,7 +70,26 @@ class FakeProviderAPI:
         body: dict = json.loads(request.data) if request.data else {}
         self.requests.append((method, parsed.path, parse_qs(parsed.query), body))
 
+        if method == "GET" and parsed.path == "/openapi.json":
+            return self._json(
+                {
+                    "components": {
+                        "schemas": {
+                            "MemoryCreate": {
+                                "properties": {
+                                    "max_extractions": {"anyOf": [{"minimum": 1, "type": "integer"}, {"type": "null"}]},
+                                    "max_mutations": {"anyOf": [{"minimum": 1, "type": "integer"}, {"type": "null"}]},
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+
         if method == "POST" and parsed.path == "/memories":
+            if body["infer"] is True:
+                assert body["max_extractions"] == 1
+                assert body["max_mutations"] == 2
             if self.scope is None:
                 self.scope = {key: body["metadata"][key] for key in REQUIRED_SCOPE}
             memory_id = f"pa-{self._next_id}"

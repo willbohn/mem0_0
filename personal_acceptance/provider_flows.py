@@ -24,6 +24,8 @@ from deployment.mem0_0_arch.live_verify import (
 )
 from personal_acceptance.budget import BudgetExceeded, BudgetLedger
 
+PLANNED_PROVIDER_MUTATIONS = 32
+
 
 class AcceptanceFlows(LiveVerifier):
     """Run the five provider-tier families inside one disposable REST scope.
@@ -40,6 +42,7 @@ class AcceptanceFlows(LiveVerifier):
         *,
         ledger: BudgetLedger,
         clock: Callable[[], float] = time.monotonic,
+        planned_mutations: int = PLANNED_PROVIDER_MUTATIONS,
         **kwargs: Any,
     ) -> None:
         api_url = str(kwargs.get("api_url", DEFAULT_API_URL)).rstrip("/")
@@ -48,6 +51,7 @@ class AcceptanceFlows(LiveVerifier):
         super().__init__(**kwargs)
         self.ledger = ledger
         self.clock = clock
+        self.planned_mutations = planned_mutations
         # Replace the base flow's report shape (kyoto/osaka-specific keys) with
         # this flow's own checks/counts, carrying over what __init__ already computed.
         self.report = {
@@ -56,6 +60,7 @@ class AcceptanceFlows(LiveVerifier):
                 "auth_file_private": self.report["checks"]["auth_file_private"],
                 "scope_complete": self.report["checks"]["scope_complete"],
                 "budget_ok": True,
+                "bounded_write_contract": False,
                 "supersession_live_ok": False,
                 "corroboration_live_ok": False,
                 "dispute_live_ok": False,
@@ -96,6 +101,13 @@ class AcceptanceFlows(LiveVerifier):
             self.report["checks"]["budget_ok"] = False
             raise
 
+    def _reserve_mutations(self) -> None:
+        try:
+            self.ledger.reserve_mutations(self.planned_mutations)
+        except BudgetExceeded:
+            self.report["checks"]["budget_ok"] = False
+            raise
+
     def _request(
         self,
         method: str,
@@ -119,10 +131,26 @@ class AcceptanceFlows(LiveVerifier):
         # ledger's own "every check runs before the action" contract.
         self._check_provider_clock()
         self._record_infer_write()
-        rows = self._add(content, created_at=created_at)
+        # One extraction may insert a new memory and update one predecessor.
+        # Charge that fail-closed ceiling before asking the server to work.
+        self._record_mutation("update")
+        response = self._request(
+            "POST",
+            "/memories",
+            body={
+                "messages": [{"role": "user", "content": content}],
+                "user_id": self.scope["user_id"],
+                "agent_id": self.scope["agent_id"],
+                "metadata": {**self.scope, "created_at": created_at},
+                "infer": True,
+                "max_extractions": 1,
+                "max_mutations": 2,
+            },
+        )
+        rows = self._results(response)
+        if not rows:
+            raise VerificationError("add produced no result")
         self.report["counts"]["created"] += len(rows)
-        for _ in rows[1:]:
-            self._record_infer_write()
         if len(rows) != 1:
             raise VerificationError("synthetic infer add must produce exactly one memory")
         memory_id = rows[0].get("id")
@@ -142,14 +170,13 @@ class AcceptanceFlows(LiveVerifier):
                 "agent_id": self.scope["agent_id"],
                 "metadata": {**self.scope, "created_at": created_at},
                 "infer": False,
+                "max_mutations": 1,
             },
         )
         rows = self._results(response)
         if not rows:
             raise VerificationError("raw add produced no result")
         self.report["counts"]["created"] += len(rows)
-        for _ in rows[1:]:
-            self._record_mutation("write")
         if len(rows) != 1:
             raise VerificationError("synthetic raw add must produce exactly one memory")
         memory_id = rows[0].get("id")
@@ -229,6 +256,19 @@ class AcceptanceFlows(LiveVerifier):
             raise VerificationError("direct-vs-lifecycle recall did not satisfy the synthetic assertion")
 
     def _run_flow(self) -> None:
+        self._reserve_mutations()
+        schema = self._request("GET", "/openapi.json")
+        try:
+            properties = schema["components"]["schemas"]["MemoryCreate"]["properties"]
+            max_extractions = properties["max_extractions"]
+            max_mutations = properties["max_mutations"]
+        except (KeyError, TypeError):
+            raise VerificationError("shadow does not advertise the bounded-write contracts")
+        for contract in (max_extractions, max_mutations):
+            variants = [contract, *contract.get("anyOf", [])]
+            if not any(item.get("minimum") == 1 and item.get("type") == "integer" for item in variants):
+                raise VerificationError("shadow advertises an invalid bounded-write contract")
+        self.report["checks"]["bounded_write_contract"] = True
         self._supersession_flow()
         self._corroboration_flow()
         self._dispute_flow()

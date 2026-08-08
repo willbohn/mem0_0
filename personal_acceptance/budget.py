@@ -30,6 +30,7 @@ class BudgetLedger:
         self.provider_wall_clock_seconds = float(provider_wall_clock_seconds)
         self._families: set[str] = set()
         self._mutations = 0
+        self._reserved_mutations = 0
         self._infer_writes = 0
         self._provider_started: float | None = None
         self._provider_elapsed = 0.0
@@ -44,9 +45,20 @@ class BudgetLedger:
     def record_mutation(self, kind: str) -> None:
         if kind not in _MUTATION_KINDS:
             raise ValueError(f"unknown mutation kind: {kind}")
-        if self._mutations + 1 > self.max_mutations:
+        if self._reserved_mutations:
+            self._reserved_mutations -= 1
+        elif self._mutations + 1 > self.max_mutations:
             raise BudgetExceeded("mutations", f"mutation budget of {self.max_mutations} would be exceeded")
         self._mutations += 1
+
+    def reserve_mutations(self, count: int) -> None:
+        """Reserve capacity for a bounded write-and-cleanup plan before it starts."""
+        count = int(count)
+        if count < 0:
+            raise ValueError("mutation reservation must be non-negative")
+        if self._mutations + self._reserved_mutations + count > self.max_mutations:
+            raise BudgetExceeded("mutations", f"mutation budget of {self.max_mutations} would be exceeded")
+        self._reserved_mutations += count
 
     def record_infer_write(self) -> None:
         if self._infer_writes + 1 > self.max_infer_writes:

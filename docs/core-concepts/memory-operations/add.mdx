@@ -13,6 +13,8 @@ Adding memory is how Mem0 captures useful details from a conversation so your ag
 
 - **Messages**: The ordered list of user/assistant turns you send to `add`.
 - **Infer**: Controls whether Mem0 extracts structured memories (`infer=True`, default) or stores raw messages.
+- **Max extractions (Python OSS)**: Optional positive `max_extractions` limit that rejects an oversized inferred batch before embedding or persistence.
+- **Max mutations (Python OSS)**: Optional positive `max_mutations` limit that rejects an oversized memory insert/update plan before persistence.
 - **Metadata**: Optional filters (e.g., `{"category": "movie_recommendations"}`) that improve retrieval later.
 - **User / Session identifiers**: `user_id`, `agent_id`, `app_id`, or `run_id` that scope the memory for future searches.
 - **expiration_date**: Optional `YYYY-MM-DD` date after which the memory is treated as expired. Use `expirationDate` in the JavaScript SDKs. Expired memories are hidden from `search` and `get_all` unless you pass `show_expired` (`showExpired` in JavaScript); fetching by ID still returns them.
@@ -148,6 +150,9 @@ messages = [
 # Store inferred memories (default behavior)
 result = m.add(messages, user_id="alice", metadata={"category": "movie_recommendations"})
 
+# Fail before persistence if this call extracts more than one memory
+result = m.add(messages, user_id="alice", max_extractions=1, max_mutations=2)
+
 # Optionally store raw messages without inference
 result = m.add(messages, user_id="alice", metadata={"category": "movie_recommendations"}, infer=False)
 
@@ -187,6 +192,14 @@ const expiring = memory.add(messages, {
 <Note>
   Python and TypeScript OSS inference use one evidence-bound extraction call. Each admitted memory must cite an exact excerpt and source-message index from a non-system message. State memories can corroborate, supersede, or dispute earlier values while preserving every version; events and independent preferences are not replaced merely because they are newer or semantically similar. Embeddings complete before persistence, and every inserted ID is verified; incomplete provider batches are compensated and raise `MemoryPersistenceError`.
 </Note>
+
+Python OSS callers that need a hard per-call cardinality bound can pass
+`max_extractions`. If the validated inferred batch is larger than the limit,
+the call raises `ValidationError` before embedding or persistence; it never
+truncates and partially stores the batch. The self-hosted REST server exposes
+the same field on `POST /memories`. `max_mutations` provides the matching
+bound for planned primary memory-store inserts and predecessor updates, so a
+single state transition cannot hide multiple mutations behind one API call.
 
 Lifecycle fields beginning with `_mem0_` are reserved and ignored in caller-supplied update metadata. Explicit effective dates define version boundaries, so a correction learned today that says a new state began in 2020 closes its predecessor at the 2020 boundary rather than today's ingestion time. In state-aware mode, lifecycle-managed state-like memories cannot have their text edited in place because that would invalidate their value and version links; call `add()` with the correction instead. Legacy records and `recall.mode="legacy"` retain the existing update behavior.
 

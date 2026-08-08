@@ -39,6 +39,30 @@ def test_mutation_kind_validated():
         ledger.record_mutation("upsert")
 
 
+def test_mutation_reservation_fails_before_provider_work_and_is_consumed_by_actual_mutations():
+    ledger = BudgetLedger(max_mutations=3)
+    ledger.reserve_mutations(3)
+
+    ledger.record_mutation("write")
+    ledger.record_mutation("delete")
+    ledger.record_mutation("update")
+
+    assert ledger.snapshot()["mutations"] == 3
+    with pytest.raises(BudgetExceeded) as excinfo:
+        ledger.record_mutation("write")
+    assert excinfo.value.limit == "mutations"
+
+
+def test_mutation_reservation_rejects_an_over_budget_plan_without_partial_state():
+    ledger = BudgetLedger(max_mutations=2)
+
+    with pytest.raises(BudgetExceeded) as excinfo:
+        ledger.reserve_mutations(3)
+
+    assert excinfo.value.limit == "mutations"
+    assert ledger.snapshot()["mutations"] == 0
+
+
 def test_provider_wall_clock_fails_run_not_extends():
     ledger = BudgetLedger(provider_wall_clock_seconds=100.0)
     ledger.start_provider_clock(now=1000.0)

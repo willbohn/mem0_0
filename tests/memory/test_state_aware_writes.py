@@ -7,6 +7,7 @@ import pytest
 
 from mem0.configs.base import MemoryConfig
 from mem0.exceptions import EmbeddingError, ExtractionParseError, MemoryPersistenceError
+from mem0.exceptions import ValidationError as Mem0ValidationError
 from mem0.memory.main import AsyncMemory, Memory
 from mem0.vector_stores.pinecone import PineconeDB
 from mem0.vector_stores.qdrant import Qdrant
@@ -67,6 +68,94 @@ def make_memory(extractions, existing=None, memory_class=Memory):
     memory.db.get_last_messages.return_value = []
     memory._entity_store = None
     return memory
+
+
+def test_max_extractions_rejects_an_oversized_inferred_batch_before_persistence():
+    memory = make_memory([extraction("User lives in Tokyo", "Tokyo"), extraction("User likes tea", "tea")])
+
+    with pytest.raises(Mem0ValidationError, match="max_extractions"):
+        memory._add_to_vector_store(
+            [{"role": "user", "content": "I live in Tokyo and like tea"}],
+            {"user_id": "u1"},
+            {"user_id": "u1"},
+            infer=True,
+            max_extractions=1,
+        )
+
+    memory.embedding_model.embed_batch.assert_not_called()
+    memory.vector_store.insert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_max_extractions_rejects_an_oversized_inferred_batch_before_persistence():
+    memory = make_memory(
+        [extraction("User lives in Tokyo", "Tokyo"), extraction("User likes tea", "tea")],
+        memory_class=AsyncMemory,
+    )
+
+    with pytest.raises(Mem0ValidationError, match="max_extractions"):
+        await memory._add_to_vector_store(
+            [{"role": "user", "content": "I live in Tokyo and like tea"}],
+            {"user_id": "u1"},
+            {"user_id": "u1"},
+            infer=True,
+            max_extractions=1,
+        )
+
+    memory.embedding_model.embed_batch.assert_not_called()
+    memory.vector_store.insert.assert_not_called()
+
+
+@pytest.mark.parametrize("memory_class", [Memory, AsyncMemory], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_max_mutations_rejects_an_oversized_inferred_plan_before_persistence(memory_class):
+    memory = make_memory(
+        [extraction("User lives in Tokyo", "Tokyo"), extraction("User likes tea", "tea")],
+        memory_class=memory_class,
+    )
+
+    with pytest.raises(Mem0ValidationError, match="max_mutations"):
+        call = memory._add_to_vector_store(
+            [{"role": "user", "content": "I live in Tokyo and like tea"}],
+            {"user_id": "u1"},
+            {"user_id": "u1"},
+            infer=True,
+            max_mutations=1,
+        )
+        if memory_class is AsyncMemory:
+            await call
+
+    memory.vector_store.insert.assert_not_called()
+    memory.vector_store.update.assert_not_called()
+
+
+def test_public_add_forwards_max_extractions_before_persistence(monkeypatch):
+    memory = make_memory([extraction("User lives in Tokyo", "Tokyo"), extraction("User likes tea", "tea")])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+
+    with pytest.raises(Mem0ValidationError, match="max_extractions"):
+        memory.add(
+            [{"role": "user", "content": "I live in Tokyo and like tea"}],
+            user_id="u1",
+            max_extractions=1,
+        )
+
+    memory.vector_store.insert.assert_not_called()
+
+
+def test_public_add_forwards_max_mutations_before_persistence(monkeypatch):
+    memory = make_memory([extraction("User lives in Tokyo", "Tokyo"), extraction("User likes tea", "tea")])
+    monkeypatch.setattr("mem0.memory.main.capture_event", lambda *_a, **_k: None)
+
+    with pytest.raises(Mem0ValidationError, match="max_mutations"):
+        memory.add(
+            [{"role": "user", "content": "I live in Tokyo and like tea"}],
+            user_id="u1",
+            max_extractions=2,
+            max_mutations=1,
+        )
+
+    memory.vector_store.insert.assert_not_called()
 
 
 def use_incomplete_enumeration_store(memory, existing=None):
