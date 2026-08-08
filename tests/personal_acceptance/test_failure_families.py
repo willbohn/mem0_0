@@ -78,9 +78,7 @@ def test_persistence_atomicity_family(scripted_memory):
     memory = scripted_memory(
         extraction_json(
             extraction_item("User lives in Toyama", "Toyama", relation=None),
-            extraction_item(
-                "User works remotely", "remote", predicate="workstyle", relation=None, excerpt="Toyama"
-            ),
+            extraction_item("User works remotely", "remote", predicate="workstyle", relation=None, excerpt="Toyama"),
         )
     )
     memory.embedding_model.embed_batch.side_effect = RuntimeError("embedder down")
@@ -94,9 +92,7 @@ def test_persistence_atomicity_family(scripted_memory):
     memory = scripted_memory(
         extraction_json(
             extraction_item("User lives in Kobe", "Kobe", relation=None),
-            extraction_item(
-                "User works remotely", "remote", predicate="workstyle", relation=None, excerpt="Kobe"
-            ),
+            extraction_item("User works remotely", "remote", predicate="workstyle", relation=None, excerpt="Kobe"),
         )
     )
     store = _PartialInsertVectorStore()

@@ -22,12 +22,12 @@ def test_duplicate_family_registration_rejected():
 
 def test_mutation_and_infer_budgets():
     ledger = BudgetLedger(max_mutations=3, max_infer_writes=1)
-    ledger.record_infer_write()          # 1 infer, 1 mutation
-    ledger.record_mutation("delete")     # 2 mutations
+    ledger.record_infer_write()  # 1 infer, 1 mutation
+    ledger.record_mutation("delete")  # 2 mutations
     with pytest.raises(BudgetExceeded) as excinfo:
-        ledger.record_infer_write()      # infer limit hit first
+        ledger.record_infer_write()  # infer limit hit first
     assert excinfo.value.limit == "infer_writes"
-    ledger.record_mutation("write")      # 3 mutations
+    ledger.record_mutation("write")  # 3 mutations
     with pytest.raises(BudgetExceeded) as excinfo:
         ledger.record_mutation("update")
     assert excinfo.value.limit == "mutations"

@@ -138,9 +138,7 @@ class AcceptanceFlows(LiveVerifier):
         # regression) and not one (a wrongly-collapsed canonical answer).
         both_conflicting_present = len(current_rows) == 2
 
-        audit = self._request(
-            "POST", "/memories/audit", body={"filters": dict(self.scope), "limit": MAX_SCOPE_RESULTS}
-        )
+        audit = self._request("POST", "/memories/audit", body={"filters": dict(self.scope), "limit": MAX_SCOPE_RESULTS})
         audit_completed = isinstance(audit, dict) and isinstance(audit.get("scanned"), int)
 
         self.report["checks"]["dispute_live_ok"] = both_conflicting_present and audit_completed

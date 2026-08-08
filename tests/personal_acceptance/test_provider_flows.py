@@ -197,9 +197,7 @@ def test_provider_flows_fail_closed_when_supersession_search_returns_the_superse
     assert ledger.snapshot()["mutations"] == 4  # 2 infer writes + 2 deletes
 
 
-def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_results(
-    key_file: Path, monkeypatch
-) -> None:
+def test_provider_flows_dispute_check_fails_closed_when_search_returns_no_results(key_file: Path, monkeypatch) -> None:
     """Regression guard: a fake that drops both dispute memories must not pass vacuously.
 
     ``len(current_rows) != 1`` was true for 0 rows too, so a regression that
