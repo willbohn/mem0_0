@@ -11,8 +11,11 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-05` — preserve and review the provider-tier report and
-  reconciliation evidence. `SA-04` is DONE (third run green; see below).
+- **Next task:** `SA-06` (DEFERRED) / `SA-07` (BLOCKED_DECISION) — no task is
+  safe to auto-select. `SA-04` and `SA-05` are DONE; everything remaining is
+  `BLOCKED_*` or `DEFERRED`, so per the ledger protocol no `NEXT` is
+  auto-selected. Awaiting an explicit owner decision (SA-07 benchmark plan, or
+  lifting SA-06).
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
@@ -78,7 +81,7 @@ Use only these values in the ledger:
 || SA-02 | DONE | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Re-attested 2026-08-10: local/remote/PR HEAD all `570c4a29`; working tree and `git diff --check` clean; PR #1 OPEN/DRAFT/MERGEABLE; readiness `ready`; reconcile-shadow `reconciled` (cross-store verified, legacy retained); shadow healthy on image rev `75021d0a`; legacy running/healthy. No divergence from the 2026-08-08 checkpoint. |
 | SA-03 | DONE | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `fa7ae22` contains it). | Executed 2026-08-10: built `localhost/mem0_0-arch:fa7ae22` from the attested checkout (revision `fa7ae22`, source-tree-sha256 `2088ce3f…`); podman compose recreated `mem0_0-arch-shadow-mem0-1` with `--no-build --force-recreate`; image labels match attestation; running image matches; readiness `ready`; reconcile-shadow `reconciled` (postgres rows=10, sqlite history=24/messages=0 unchanged); legacy `mem0-arch-mem0-1` running/healthy. No stored-body or secret exposure. |
 | SA-04 | DONE | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Third provider run (2026-08-10) GREEN: `ok=true`, all 12 checks true (supersession/corroboration/dispute/reversion/direct-vs-lifecycle all `*_live_ok=true`), `reconciled=true`, `cleanup_remaining=0`, `budget_ok=true` (mutations=31 ≤ 32). Final reconcile-shadow: postgres 10 / sqlite history 24 / messages 0, matching the receipt baseline exactly. |
-| SA-05 | READY | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report saved outside Git; exact cleanup succeeds; reconciliation passes; ledger records result without memory bodies or scope values. |
+| SA-05 | DONE | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report preserved outside Git at `.personal-acceptance/report.json` (gitignored), SHA-256 `a91d5a3f…5dd66a`. Aggregates (no bodies/scope values): `ok=true`, `reconciled=true`, `created=11`, `cleanup_deleted=10`, `cleanup_history_deleted=20`, `cleanup_messages_deleted=10`, `cleanup_remaining=0`. Exact-ID cleanup succeeded; independent reconcile-shadow passes (pg 10 / sqlite history 24 / messages 0). Recorded without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
 | SA-07 | BLOCKED_DECISION | Approve an official benchmark compute, cost, time, and parallelism plan. | SA-04 and SA-05 pass. | Written decision covers STALE, Memora/FAMA, LoCoMo, LongMemEval, BEAM, identical arms, provider budget, estimated duration/cost, stop conditions, and unchanged acceptance thresholds. |
 | SA-08 | BLOCKED_DEPENDENCY | Execute and evaluate the official benchmark matrix. | SA-07 approved; pinned datasets/models/runtimes ready. | Reproducible manifests and content-free summaries satisfy every gate; no benchmark claim is made before this row is `DONE`. |
@@ -265,3 +268,13 @@ Append entries in JST and keep them chronological.
   `cleanup_discovered=10`. Post-run `reconcile_shadow` independent re-check:
   postgres 10 / sqlite history 24 / messages 0 — baseline intact. `SA-04` →
   DONE. Next is `SA-05`.
+- **2026-08-10 — SA-05 DONE (evidence preserved):** Confirmed the scalar-only
+  provider-tier report is preserved outside Git (`.personal-acceptance/report.json`
+  is gitignored, not tracked). Recorded SHA-256 `a91d5a3ff7c7fc58d1a70b8ce2f592258106ee98f734198a2f6b9ad4865dd66a`
+  and aggregate results in the ledger (no memory bodies or scope values):
+  `ok=true`, `reconciled=true`, `created=11`, `cleanup_deleted=10`,
+  `cleanup_history_deleted=20`, `cleanup_messages_deleted=10`,
+  `cleanup_remaining=0`. Exact synthetic cleanup succeeded; independent
+  reconcile-shadow passes. `SA-05` → DONE. With SA-04 and SA-05 both DONE and
+  all remaining rows `BLOCKED_*`/`DEFERRED`, no task is safe to auto-select;
+  awaiting an explicit owner decision (SA-07 benchmark plan, or lifting SA-06).
