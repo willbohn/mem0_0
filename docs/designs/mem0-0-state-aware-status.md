@@ -11,10 +11,9 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-03` (approved 2026-08-10 by owner override of
-  `BLOCKED_APPROVAL`; prerequisites satisfied). Execution — refreshing the
-  isolated shadow to the tested bounded-write target — is pending an explicit
-  run instruction; no runtime mutation has occurred yet.
+- **Next task:** none safe to auto-select after SA-03. The next technical step
+  is `SA-04` (live provider tier), but it is `BLOCKED_APPROVAL` (synthetic writes
+  + local-model time need explicit approval).
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
@@ -78,7 +77,7 @@ Use only these values in the ledger:
 | SA-00 | DONE | Implement and stabilize state-aware lifecycle across Python, REST, TypeScript, evaluation, deployment, and bridge surfaces. | Approved design and implementation plan. | Code head `7c8d60dc`; detailed verification in the handover. |
 | SA-01 | DONE | Publish the verified checkpoint as a draft PR without force-pushing. | SA-00. | Draft PR #1; published checkpoint `b86389bc`. |
 || SA-02 | DONE | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Re-attested 2026-08-10: local/remote/PR HEAD all `570c4a29`; working tree and `git diff --check` clean; PR #1 OPEN/DRAFT/MERGEABLE; readiness `ready`; reconcile-shadow `reconciled` (cross-store verified, legacy retained); shadow healthy on image rev `75021d0a`; legacy running/healthy. No divergence from the 2026-08-08 checkpoint. |
-| SA-03 | READY | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `570c4a29` contains it). | Approved 2026-08-10; execution pending explicit run. Upon execution: Shadow healthy; labels and source attestation match the exact approved branch head; legacy unchanged; content-free receipt still reconciles. |
+| SA-03 | DONE | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `fa7ae22` contains it). | Executed 2026-08-10: built `localhost/mem0_0-arch:fa7ae22` from the attested checkout (revision `fa7ae22`, source-tree-sha256 `2088ce3f…`); podman compose recreated `mem0_0-arch-shadow-mem0-1` with `--no-build --force-recreate`; image labels match attestation; running image matches; readiness `ready`; reconcile-shadow `reconciled` (postgres rows=10, sqlite history=24/messages=0 unchanged); legacy `mem0-arch-mem0-1` running/healthy. No stored-body or secret exposure. |
 | SA-04 | BLOCKED_APPROVAL | Run the five-family live provider tier against the canonical shadow. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Content-free report has `acceptance_class=bounded_personal_local`, `tier=provider`, `ok=true`, all provider checks true, budgets within limits, and `checks.reconciled=true`. |
 | SA-05 | READY | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report saved outside Git; exact cleanup succeeds; reconciliation passes; ledger records result without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
@@ -188,3 +187,18 @@ Append entries in JST and keep them chronological.
   `0287aa37`); pushed `main` and `feat` to `origin`. PR #1 auto-closed as
   `MERGED` (mergedAt 2026-08-10T06:57:00Z, headRefOid `570c4a29`). No runtime
   mutation occurred. `SA-03` remains `READY`/approved but execution not yet run.
+- **2026-08-10 — SA-03 EXECUTED (shadow refresh):** Rebuilt the isolated shadow
+  from the approved tested target. Updated the private pin file
+  (`~/.config/mem0_0-arch/deployment.env`) to revision `fa7ae22` /
+  source-tree-sha256 `2088ce3f…` (PGVECTOR/PYTHON digests preserved, mode 0600).
+  `source_attestation` confirmed a clean checkout (0 changed, 0 untracked).
+  `shadow_runtime.start_shadow` re-attested before/after build (tree unchanged),
+  built image `localhost/mem0_0-arch:fa7ae22`, and recreated
+  `mem0_0-arch-shadow-mem0-1` with `--no-build --force-recreate`. Verified:
+  image labels `org.opencontainers.image.revision=fa7ae22` and
+  `io.mem0_0.source-tree-sha256=2088ce3f…` match the attestation; running image
+  matches; container healthy. Re-attestation: readiness `ready`; reconcile-shadow
+  `reconciled` (postgres rows=10 / sqlite history rows=24 / messages rows=0,
+  unchanged); legacy `mem0-arch-mem0-1` running/healthy and not retargeted. No
+  stored-body or secret exposure. `SA-03` → DONE. Next is `SA-04` (live provider
+  tier) but it is `BLOCKED_APPROVAL`.
