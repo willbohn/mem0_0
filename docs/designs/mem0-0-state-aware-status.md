@@ -183,3 +183,8 @@ Append entries in JST and keep them chronological.
   (actual shadow refresh) is approved but not yet run; awaiting an explicit run
   instruction. Ledger updated to record the approval and the merge; execution
   evidence to be appended when `SA-03` is actually performed.
+- **2026-08-10 — MERGE + PUSH COMPLETE (SA-11 executed):** Committed ledger
+  update as `0287aa37`; fast-forward merged `feat` into `main` (`main` now
+  `0287aa37`); pushed `main` and `feat` to `origin`. PR #1 auto-closed as
+  `MERGED` (mergedAt 2026-08-10T06:57:00Z, headRefOid `570c4a29`). No runtime
+  mutation occurred. `SA-03` remains `READY`/approved but execution not yet run.
