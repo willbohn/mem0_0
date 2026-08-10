@@ -11,11 +11,9 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-06` (DEFERRED) / `SA-07` (BLOCKED_DECISION) — no task is
-  safe to auto-select. `SA-04` and `SA-05` are DONE; everything remaining is
-  `BLOCKED_*` or `DEFERRED`, so per the ledger protocol no `NEXT` is
-  auto-selected. Awaiting an explicit owner decision (SA-07 benchmark plan, or
-  lifting SA-06).
+- **Next task:** `SA-07` (IN_PROGRESS) — build the content-free benchmark
+  instrumentation (Phase A of the promote-and-integrate plan). Plan:
+  `docs/superpowers/plans/2026-08-10-promote-and-integrate.md`.
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
@@ -83,12 +81,15 @@ Use only these values in the ledger:
 | SA-04 | DONE | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Third provider run (2026-08-10) GREEN: `ok=true`, all 12 checks true (supersession/corroboration/dispute/reversion/direct-vs-lifecycle all `*_live_ok=true`), `reconciled=true`, `cleanup_remaining=0`, `budget_ok=true` (mutations=31 ≤ 32). Final reconcile-shadow: postgres 10 / sqlite history 24 / messages 0, matching the receipt baseline exactly. |
 | SA-05 | DONE | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report preserved outside Git at `.personal-acceptance/report.json` (gitignored), SHA-256 `a91d5a3f…5dd66a`. Aggregates (no bodies/scope values): `ok=true`, `reconciled=true`, `created=11`, `cleanup_deleted=10`, `cleanup_history_deleted=20`, `cleanup_messages_deleted=10`, `cleanup_remaining=0`. Exact-ID cleanup succeeded; independent reconcile-shadow passes (pg 10 / sqlite history 24 / messages 0). Recorded without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
-| SA-07 | BLOCKED_DECISION | Approve an official benchmark compute, cost, time, and parallelism plan. | SA-04 and SA-05 pass. | Written decision covers STALE, Memora/FAMA, LoCoMo, LongMemEval, BEAM, identical arms, provider budget, estimated duration/cost, stop conditions, and unchanged acceptance thresholds. |
-| SA-08 | BLOCKED_DEPENDENCY | Execute and evaluate the official benchmark matrix. | SA-07 approved; pinned datasets/models/runtimes ready. | Reproducible manifests and content-free summaries satisfy every gate; no benchmark claim is made before this row is `DONE`. |
+| SA-07 | IN_PROGRESS | RE-SCOPED (2026-08-10): build the content-free benchmark instrumentation (scorecard schema, diff tool, arm-runner wrapper) so promotion can be measured; NO LONGER a go/no-go gate. | Owner pivot 2026-08-10; SA-04/05 pass. | Scorecard + diff tool + arm-runner exist with tests; vanilla LOCOMO arm emits a reproducible content-free scorecard. |
+| SA-08 | BLOCKED_DEPENDENCY | Execute and evaluate the official benchmark matrix (now the candidate arm during promotion). | SA-07 instrumentation built; candidate live post-cutover. | Reproducible manifests and content-free scorecards for vanilla + candidate arms; `scorecard_diff` report recorded. |
 | SA-09 | BLOCKED_DEPENDENCY | Install and behaviorally validate the OMP integration in a dedicated profile. | OMP installed through its owning system workflow; separate approval to write under `~/.omp`. | Exact six-tool discovery, scoped CRUD, search-before-answer, durable-write, compaction/restart persistence, exact cleanup, and reconciliation pass. A transport handshake alone is insufficient. |
 | SA-10 | BLOCKED_DEPENDENCY | Re-run complete supported suites and obtain fresh verifier and critic decisions on the final merge candidate. | SA-04/05, SA-08, and every merge-scope prerequisite complete; final candidate SHA frozen. | Full Python/server/deployment/TypeScript evidence, baseline differential, verifier confirmation, critic approval, clean worktree, and exact pushed SHA. |
-| SA-11 | BLOCKED_DECISION | Decide whether PR #1 becomes ready for review and whether to merge it into fork `main`. | SA-10 done; known server-test disposition recorded. | Explicit decision, final PR body/checklist accurate, required reviews/checks green. |
-| SA-12 | BLOCKED_APPROVAL | Perform production cutover, harness retargeting, rollback drill, and legacy-unit disablement while retaining rollback state. | SA-11 merged plus every cutover gate emitted by `deployment.mem0_0_arch.cutover` satisfied. | Immutable cutover record, quiesced encrypted snapshot, exact reconciliation, atomic backed-up harness changes, successful rollback drill, and explicit cutover approval. |
+| SA-11 | BLOCKED_DECISION | Decide whether the change becomes ready for review and whether to merge it. NOTE: PR #1 already ff-merged into fork `main` 2026-08-10, so merge scope must be re-confirmed on entry (new PR vs upstream). | SA-10 done; known server-test disposition recorded. | Explicit decision, final PR body/checklist accurate, required reviews/checks green. |
+| SA-12 | BLOCKED_APPROVAL | RE-SCOPED (2026-08-10, owner override): perform production cutover + harness retargeting with FIX-FORWARD response policy. Rollback drill and `legacy_rollback_image_provenance` gate are WAIVED; `benchmark_acceptance` is report-only (never blocks). | Instrumentation (SA-07) built; owner re-approval to execute cutover. | Immutable cutover record, harness bridge configs backed up + retargeted (8888→28889), legacy unit disabled-but-retained, candidate scorecard captured during promotion, regressions triaged to fix-forward. |
+| SA-13 | READY | mem0_0 as a memory provider for Claude Code. | SA-12 cutover done; `integrations/mem0-plugin` surface verified against candidate. | Provider points at candidate endpoint; MCP tools discoverable; scoped CRUD + search-before-answer + exact cleanup pass. |
+| SA-14 | READY | mem0_0 as a memory provider for Codex. | SA-12 cutover done. | Same contract as SA-13 against the Codex harness. |
+| SA-15 | READY | mem0_0 as a memory provider for Hermes Agent (NEW `integrations/hermes/`; none exists today). | SA-12 cutover done. | New integration following the MCP+hooks pattern; registered in 5× marketplace.json + docs/docs.json + docs/llms.txt + CI; same behavioral contract. |
 
 ## Resume procedure
 
