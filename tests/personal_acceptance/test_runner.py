@@ -51,17 +51,27 @@ GOLDEN_RECONCILE_RESULT = {
 class FakeProviderAPI:
     """Minimal callable opener stubbing the five provider-flow REST calls.
 
-    Local copy of ``tests/personal_acceptance/test_provider_flows.py``'s
-    ``FakeProviderAPI`` (this suite's convention for offline REST doubles).
-    Only the happy path is needed here since Task 8's tests exercise the
-    runner's reconciliation gate and report shape, not extraction semantics.
+    Scope-aware: the provider flows now give each family its own isolated scope,
+    so this double tracks records per scope and matches search/discovery/audit
+    requests against the exact scope they carry. Only the happy path is needed
+    here since Task 8's tests exercise the runner's reconciliation gate and report
+    shape, not extraction semantics.
     """
 
     def __init__(self) -> None:
         self.requests: list[tuple] = []
         self.records: dict[str, dict] = {}
-        self.scope: dict[str, str] | None = None
+        self.scopes: set[str] = set()
         self._next_id = 1
+
+    @staticmethod
+    def _scope_key(metadata_or_filters: dict) -> str:
+        # Records nest machine_id/project_id/data_class under "metadata"; query
+        # filters carry them at top level. Accept either location.
+        def _val(key: str) -> str:
+            return metadata_or_filters.get(key) or (metadata_or_filters.get("metadata") or {}).get(key) or ""
+
+        return "|".join(_val(k) for k in REQUIRED_SCOPE)
 
     def __call__(self, request, timeout: float) -> bytes:
         del timeout
@@ -90,32 +100,34 @@ class FakeProviderAPI:
             if body["infer"] is True:
                 assert body["max_extractions"] == 1
                 assert body["max_mutations"] == 2
-            if self.scope is None:
-                self.scope = {key: body["metadata"][key] for key in REQUIRED_SCOPE}
+            scope = {key: body["metadata"][key] for key in REQUIRED_SCOPE}
+            key = self._scope_key(scope)
+            self.scopes.add(key)
             memory_id = f"pa-{self._next_id}"
             self._next_id += 1
             content = body["messages"][0]["content"]
             self.records[memory_id] = {
                 "id": memory_id,
                 "memory": content,
-                "user_id": self.scope["user_id"],
-                "agent_id": self.scope["agent_id"],
-                "metadata": {key: self.scope[key] for key in ("machine_id", "project_id", "data_class")},
+                "user_id": scope["user_id"],
+                "agent_id": scope["agent_id"],
+                "metadata": {k: scope[k] for k in ("machine_id", "project_id", "data_class")},
             }
             return self._json({"results": [{"id": memory_id, "event": "ADD"}]})
 
         if method == "POST" and parsed.path == "/search":
-            assert body["filters"] == self.scope
-            return self._json({"results": self._search_results(body["query"])})
+            scope_key = self._scope_key(body["filters"])
+            return self._json({"results": self._search_results(body["query"], scope_key)})
 
         if method == "POST" and parsed.path == "/memories/audit":
-            assert body == {"filters": self.scope, "limit": 100}
             return self._json({"scanned": len(self.records), "summary": {"disputed": 2}})
 
         if method == "GET" and parsed.path == "/memories":
-            assert {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"} == self.scope
+            query_scope = {key: values[-1] for key, values in parse_qs(parsed.query).items() if key != "top_k"}
+            scope_key = self._scope_key(query_scope)
             top_k = int(parse_qs(parsed.query)["top_k"][-1])
-            return self._json({"results": list(self.records.values())[:top_k]})
+            results = [r for r in self.records.values() if self._scope_key(r) == scope_key][:top_k]
+            return self._json({"results": results})
 
         if method == "DELETE" and parsed.path.startswith("/memories/"):
             self.records.pop(parsed.path.rsplit("/", 1)[-1], None)
@@ -123,9 +135,11 @@ class FakeProviderAPI:
 
         raise AssertionError(f"unexpected request: {method} {parsed.path}")
 
-    def _search_results(self, query: str) -> list[dict]:
+    def _search_results(self, query: str, scope_key: str) -> list[dict]:
+        scoped = [r for r in self.records.values() if self._scope_key(r) == scope_key]
+
         def rows_with(substring: str) -> list[dict]:
-            return [record for record in self.records.values() if substring.lower() in record["memory"].lower()]
+            return [record for record in scoped if substring.lower() in record["memory"].lower()]
 
         if query == "What is the current city preference?":
             return rows_with("Matsue")

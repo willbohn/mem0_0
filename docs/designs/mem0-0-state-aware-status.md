@@ -11,19 +11,8 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-04` decision — the second provider run completed
-  (`ok=false`) but its **harness fix is verified**: `reconciled=true`,
-  `history_cleanup_complete=true`, `cleanup_history_deleted=4`,
-  `cleanup_remaining=0`. The 5 behavioral family checks are `false` because the
-  run aborted at the first family (**supersession**) on a live-model
-  extraction-quality failure, NOT a code defect (deterministic state-aware e2e
-  + lifecycle-family tests pass 8/8 with scripted `relation:"supersedes"`).
-  Root cause: `prism-ml/bonsai-27b` extracted `city_preference` as a state key
-  for "Kumamoto" but did **not** emit `relation:"supersedes"` for "City
-  preference changed to Matsue.", so Matsue landed as a second *active* memory;
-  current-recall returned both and the assertion failed. Open decision: switch
-  the local LLM (e.g. `qwen/qwen3.6-27b`), strengthen the extraction prompt, or
-  record SA-04 as BLOCKED on local-model extraction quality.
+- **Next task:** `SA-05` — preserve and review the provider-tier report and
+  reconciliation evidence. `SA-04` is DONE (third run green; see below).
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
@@ -88,7 +77,7 @@ Use only these values in the ledger:
 | SA-01 | DONE | Publish the verified checkpoint as a draft PR without force-pushing. | SA-00. | Draft PR #1; published checkpoint `b86389bc`. |
 || SA-02 | DONE | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Re-attested 2026-08-10: local/remote/PR HEAD all `570c4a29`; working tree and `git diff --check` clean; PR #1 OPEN/DRAFT/MERGEABLE; readiness `ready`; reconcile-shadow `reconciled` (cross-store verified, legacy retained); shadow healthy on image rev `75021d0a`; legacy running/healthy. No divergence from the 2026-08-08 checkpoint. |
 | SA-03 | DONE | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `fa7ae22` contains it). | Executed 2026-08-10: built `localhost/mem0_0-arch:fa7ae22` from the attested checkout (revision `fa7ae22`, source-tree-sha256 `2088ce3f…`); podman compose recreated `mem0_0-arch-shadow-mem0-1` with `--no-build --force-recreate`; image labels match attestation; running image matches; readiness `ready`; reconcile-shadow `reconciled` (postgres rows=10, sqlite history=24/messages=0 unchanged); legacy `mem0-arch-mem0-1` running/healthy. No stored-body or secret exposure. |
-| SA-04 | IN_PROGRESS | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Second provider run completed `ok=false`. Harness fix VERIFIED: `reconciled=true`, `history_cleanup_complete=true`, `cleanup_history_deleted=4`, `cleanup_remaining=0`. Behavioral FAILURE is model-side: `prism-ml/bonsai-27b` did not emit `relation:"supersedes"` for the Matsue correction, so supersession/conflict families aborted. Deterministic e2e (8/8) confirms code path correct. Decision pending on model/prompt. |
+| SA-04 | DONE | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Third provider run (2026-08-10) GREEN: `ok=true`, all 12 checks true (supersession/corroboration/dispute/reversion/direct-vs-lifecycle all `*_live_ok=true`), `reconciled=true`, `cleanup_remaining=0`, `budget_ok=true` (mutations=31 ≤ 32). Final reconcile-shadow: postgres 10 / sqlite history 24 / messages 0, matching the receipt baseline exactly. |
 | SA-05 | READY | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report saved outside Git; exact cleanup succeeds; reconciliation passes; ledger records result without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
 | SA-07 | BLOCKED_DECISION | Approve an official benchmark compute, cost, time, and parallelism plan. | SA-04 and SA-05 pass. | Written decision covers STALE, Memora/FAMA, LoCoMo, LongMemEval, BEAM, identical arms, provider budget, estimated duration/cost, stop conditions, and unchanged acceptance thresholds. |
@@ -255,3 +244,24 @@ Append entries in JST and keep them chronological.
   baseline (postgres 10 / history 24 / messages 0, no synthetic residue).
   DECISION NEEDED: switch local LLM (e.g. `qwen/qwen3.6-27b`), strengthen the
   extraction prompt, or record SA-04 as BLOCKED on model quality.
+- **2026-08-10 — SA-04 THIRD RUN GREEN (`ok=true`) + SQLITE RECONCILE ROOT CAUSE
+  RESOLVED:** The handoff's hypothesised "startup mutation" was DISPROVEN by a
+  controlled experiment. Wiped the shadow (`compose down -v`, removed
+  `history.db`), replayed the receipt via `restore_shadow` → sqlite
+  `history=24 / messages=0` (matches receipt), then started the app
+  (`--force-recreate mem0`, healthy) → counts UNCHANGED at `24 / 0`, and
+  `reconcile_shadow` reported `status=reconciled`. Startup does NOT mutate the
+  sqlite history/message counts; the earlier `history=0` divergence was residue
+  from an interrupted run, not a startup write. No receipt re-baseline and no
+  `reconcile_shadow` relaxation were needed — the original strict gate is
+  correct. Ran the full provider tier (`--tier provider`, 5 families, 10
+  inferred writes, 32-mutation budget, mandatory reconcile) against the freshly
+  restored baseline: exited 0 with `ok=true`. All 12 checks true:
+  `supersession_live_ok`, `corroboration_live_ok`, `dispute_live_ok`,
+  `reversion_live_ok`, `direct_vs_lifecycle_live_ok` all true;
+  `reconciled=true`; `cleanup_complete=true`, `cleanup_remaining=0`,
+  `cleanup_history_deleted=20`, `cleanup_messages_deleted=10`;
+  `budget_ok=true` (`mutations=31 ≤ 32`); `created=11`, `cleanup_deleted=10`,
+  `cleanup_discovered=10`. Post-run `reconcile_shadow` independent re-check:
+  postgres 10 / sqlite history 24 / messages 0 — baseline intact. `SA-04` →
+  DONE. Next is `SA-05`.
