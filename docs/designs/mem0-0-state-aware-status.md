@@ -302,3 +302,10 @@ Append entries in JST and keep them chronological.
   (SA-10/SA-11). New harness-integration tasks and the re-scoped SA-07 are
   NOT yet written as ledger rows — a full implementation plan is being drafted
   (see `docs/superpowers/plans/`) before any row is added or status changed.
+  DECISION (2026-08-10): the vanilla-vs-mem0_0 measurement arms are — vanilla
+  arm = current mem0 `main` run against the live shadow BEFORE cutover;
+  candidate arm = mem0_0; both arms use the SAME benchmarks and SAME model.
+  Mechanism: the existing benchmark runners (LOCOMO / LongMemEval / BEAM under
+  `evaluation/benchmarks/`) already take a `--backend oss|cloud` switch, so no
+  new benchmark tooling is required — Phase A wires the OSS arm at vanilla
+  `main`, captures the baseline, then the candidate arm runs post-cutover.
