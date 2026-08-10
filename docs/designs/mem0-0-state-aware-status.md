@@ -1,6 +1,6 @@
 # mem0_0 State-Aware Work Status and Task Ledger
 
-Last updated: 2026-08-08 JST
+Last updated: 2026-08-10 JST
 
 This is the canonical living control point for the state-aware lifecycle work.
 Update it whenever work starts, a gate changes state, evidence is produced, a
@@ -11,20 +11,24 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-02` — re-attest the branch, draft PR, shadow readiness,
-  image labels, and migration-receipt reconciliation without changing runtime
-  state.
-- **Branch:** `feat/state-aware-memory-python`
+- **Next task:** `SA-03` (approved 2026-08-10 by owner override of
+  `BLOCKED_APPROVAL`; prerequisites satisfied). Execution — refreshing the
+  isolated shadow to the tested bounded-write target — is pending an explicit
+  run instruction; no runtime mutation has occurred yet.
+- **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
+  on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
   `b86389bc53ed72cba5c9161813f5233af8bd1ff9`
 - **Last code-changing commit:**
   `7c8d60dc268763e0c2c4e605db763f2df67ed9ec`
-- **Draft PR:** <https://github.com/willbohn/mem0_0/pull/1>
+- **Draft PR:** <https://github.com/willbohn/mem0_0/pull/1> — merged into `main`
+  via fast-forward on 2026-08-10 (owner override of `SA-11` `BLOCKED_DECISION`).
 - **PR target:** `willbohn/mem0_0:main`
-- **Running shadow:** healthy at the last content-free check, but still built
-  from the older candidate `75021d0a616e7939eb58086f7a46c9dd86433a6b`.
-- **Current-runtime evidence:** not refreshed during this documentation-only
-  session; `SA-02` deliberately owns that read-only re-attestation.
+- **Running shadow:** healthy at the last content-free check, still built from
+  the older candidate `75021d0a616e7939eb58086f7a46c9dd86433a6b`; `SA-03` now
+  approved to refresh it to the tested target.
+- **Current-runtime evidence:** re-attested 2026-08-10 (SA-02); `SA-03` refresh
+  not yet executed.
 - **Legacy runtime:** retained, active, healthy, and not retargeted.
 - **Official benchmark acceptance:** not run and not claimed.
 - **Production cutover:** blocked.
@@ -73,8 +77,8 @@ Use only these values in the ledger:
 |---|---|---|---|---|
 | SA-00 | DONE | Implement and stabilize state-aware lifecycle across Python, REST, TypeScript, evaluation, deployment, and bridge surfaces. | Approved design and implementation plan. | Code head `7c8d60dc`; detailed verification in the handover. |
 | SA-01 | DONE | Publish the verified checkpoint as a draft PR without force-pushing. | SA-00. | Draft PR #1; published checkpoint `b86389bc`. |
-| SA-02 | NEXT | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Record exact branch/HEAD/remote SHA, PR state, readiness result, image revision/digest, reconciliation status, and counts/digests in the activity ledger. |
-| SA-03 | BLOCKED_APPROVAL | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation; the pushed target's runtime-affecting tree matches verified code head `7c8d60dc`. | Shadow healthy; labels and source attestation match the exact approved branch head; legacy unchanged; content-free receipt still reconciles. |
+|| SA-02 | DONE | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Re-attested 2026-08-10: local/remote/PR HEAD all `570c4a29`; working tree and `git diff --check` clean; PR #1 OPEN/DRAFT/MERGEABLE; readiness `ready`; reconcile-shadow `reconciled` (cross-store verified, legacy retained); shadow healthy on image rev `75021d0a`; legacy running/healthy. No divergence from the 2026-08-08 checkpoint. |
+| SA-03 | READY | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `570c4a29` contains it). | Approved 2026-08-10; execution pending explicit run. Upon execution: Shadow healthy; labels and source attestation match the exact approved branch head; legacy unchanged; content-free receipt still reconciles. |
 | SA-04 | BLOCKED_APPROVAL | Run the five-family live provider tier against the canonical shadow. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Content-free report has `acceptance_class=bounded_personal_local`, `tier=provider`, `ok=true`, all provider checks true, budgets within limits, and `checks.reconciled=true`. |
 | SA-05 | READY | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report saved outside Git; exact cleanup succeeds; reconciliation passes; ledger records result without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
@@ -158,3 +162,24 @@ Append entries in JST and keep them chronological.
   benchmark, OMP behavioral validation, merge, and cutover remained unrun.
 - **2026-08-08 — PAUSED:** No runtime or production action is in progress.
   `SA-02` is the next bounded read-only task.
+- **2026-08-10 — SA-02 RE-ATTEST (read-only):** Resume re-attestation completed
+  without runtime mutation. Git: local HEAD `570c4a29` == remote
+  `origin/feat/state-aware-memory-python` == PR #1 headRefOid `570c4a29`;
+  working tree clean; `git diff --check` clean. PR #1 OPEN/DRAFT/MERGEABLE
+  against `main`. Readiness `status=ready` (api=ready, config=private,
+  history=private, postgres=ready). Reconcile-shadow `status=reconciled`,
+  cross_store_consistency=verified, legacy_state_retained=true, postgres rows=10
+  (content_sha256 6e578e…), sqlite history rows=24 / messages rows=0. Shadow
+  `mem0_0-arch-shadow-mem0-1` healthy; image
+  `org.opencontainers.image.revision=75021d0a` (older candidate, unchanged),
+  `io.mem0_0.source-tree-sha256=33fb027e…`. Legacy `mem0-arch-mem0-1`
+  running/healthy. No result differed from the 2026-08-08 checkpoint. `SA-02`
+  complete; `SA-03` remains `BLOCKED_APPROVAL` (explicit approval for shadow
+  mutation). No task is safe to auto-advance.
+- **2026-08-10 — OWNER OVERRIDE (SA-03 + SA-11):** Will explicitly approved
+  lifting `SA-03` `BLOCKED_APPROVAL` (shadow refresh allowed) and directed the
+  merge of PR #1 into `main` (override of `SA-11` `BLOCKED_DECISION`) plus push.
+  No runtime mutation was performed by the override itself. `SA-03` execution
+  (actual shadow refresh) is approved but not yet run; awaiting an explicit run
+  instruction. Ledger updated to record the approval and the merge; execution
+  evidence to be appended when `SA-03` is actually performed.
