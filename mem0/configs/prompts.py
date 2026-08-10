@@ -620,6 +620,9 @@ Good: "User switched from in-person French classes to online Spanish classes on 
 
 When the change is explicitly temporary or a trial, capture that too — "for a month", "trying out", "testing" — these signal the old arrangement may resume.
 
+### State Transitions MUST Be Marked With relation="supersedes"
+When a New Message states a NEW value for a state-like attribute that an Existing Memory already holds (same `predicate`/`subject`, different value), the new memory is a REPLACEMENT, not a second active fact. You MUST set `"relation": "supersedes"` and link the prior memory's ID in `linked_memory_ids`. Phrase patterns that signal replacement: "changed to", "switched to", "now prefers", "no longer", "updated to", "moved to", "replaced X with Y", "X → Y". If you ever output two active memories that share the same state key (e.g. two city preferences, two employers) WITHOUT a `supersedes` relation between them, that is an EXTRACTION ERROR — exactly one should supersede the other. Never leave a prior active value dangling as if still current.
+
 ### Clean Factual Statements
 Preserve the FULL meaning including emotional reactions, motivations, and subjective experiences. Remove filler words and conversation mechanics (greetings, "like", "you know"), but KEEP:
 - Emotional states: "scared but reassured", "happy and thankful", "liberated and empowered"
@@ -859,6 +862,31 @@ Output:
 Both new memories link to related existing memories — the vet checkup links to the existing Poppy memory, and the team switch links to the existing Shopify memory. This enables the system to build a graph of related memories.
 
 
+## Example 10b: State Transition MUST Supersede the Prior Value
+
+Summary: ""
+
+Recently Extracted: []
+
+Existing Memories: [{"id": "0", "text": "User's city preference is Kumamoto"}]
+
+New Messages:
+
+[{"role": "user", "content": "Actually, I've changed my mind — my city preference is now Matsue."}]
+
+Observation Date: 2026-01-01
+
+Output:
+
+{"memory": [
+
+  {"id": "0", "text": "User's city preference changed from Kumamoto to Matsue", "kind": "preference", "subject": "user", "predicate": "city_preference", "value": "Matsue", "attributed_to": "user", "evidence": {"message_index": 0, "excerpt": "my city preference is now Matsue"}, "relation": "supersedes", "linked_memory_ids": ["0"]}
+
+]}
+
+The new value (Matsue) REPLACES the existing value (Kumamoto) for the same state key. This is a REPLACEMENT, so relation="supersedes" and the prior memory's ID is linked. Without this, both city preferences would remain active and current-recall would wrongly return two current cities. "Changed to" / "now" / "switched to" are replacement signals — never emit a bare second active memory for the same state key.
+
+
 ## Example 11: Long Multi-Topic Conversation — Don't Stop After First Topic
 
 Summary: ""
@@ -939,7 +967,7 @@ Return ONLY valid JSON parsable by json.loads(). No text, reasoning, explanation
 - **value** (string, required): The explicit value asserted by the evidence. Do not infer a value.
 - **attributed_to** (string, required): Who this memory is about. Use "user" for facts stated by or about the user (preferences, plans, personal facts). Use "assistant" for information provided by the assistant (recommendations, confirmations, plans created, information researched).
 - **evidence** (object, required): `message_index` is the explicit original index shown on the matching New Messages object, and `excerpt` is an exact, non-empty substring of that non-system message. Never cite Summary, Existing Memories, Last k Messages, or a system message.
-- **relation** (string, optional): Use "corroborates" for the same state key and value, "supersedes" only for an explicit replacement value, and "conflicts_with" when evidence is ambiguous or contradictory. Omit for independent facts and events.
+- **relation** (string, optional but REQUIRED for replacements): Use "corroborates" for the same state key and value, "supersedes" ONLY when the new memory replaces the value of an Existing Memory that shares the same state key (predicate + subject), and "conflicts_with" when evidence is ambiguous or contradictory. Omit for independent facts and events. If a New Message gives a new value for something an Existing Memory already records (e.g. a new city preference when a prior city preference exists), you MUST set relation="supersedes" and put that Existing Memory's ID in linked_memory_ids — this is how the system knows the old value is no longer current.
 - **valid_from** / **valid_to** (string, optional): Explicit temporal validity only; never invent dates.
 - **linked_memory_ids** (array of strings, optional): IDs of Existing Memories that this new memory relates to. Use the exact IDs from the Existing Memories list. Omit or pass [] if no existing memories are related.
 
@@ -959,6 +987,14 @@ You are an evidence-bound memory extractor. Read only New Messages as factual so
 Last k Messages, Recently Extracted Memories, and Existing Memories only to resolve context, avoid duplicates,
 and link related existing IDs. Never extract from system messages or invent an unsupported detail.
 
+HARD RULE -- STATE REPLACEMENTS (read first): If a New Message states a NEW value for a state key (same subject
++ predicate) that an Existing Memory already records, the new memory REPLACES the old one. You MUST set
+"relation": "supersedes" and put that Existing Memory's ID in "linked_memory_ids". Example: Existing Memory
+{"id":"0","text":"User's city preference is Kumamoto."} + New Message "City preference changed to Matsue." ->
+{"memory":[{"text":"User's city preference changed from Kumamoto to Matsue.","kind":"preference","subject":"user","predicate":"city_preference","value":"Matsue","attributed_to":"user","relation":"supersedes","linked_memory_ids":["0"]}]}.
+Never leave two active memories sharing the same state key without a supersedes relation. Phrases like "changed
+to", "switched to", "now prefers", "no longer", "updated to", "moved to" signal replacement.
+
 Return only valid JSON with this shape: {"memory": [{...}]}. If nothing is memorable, return {"memory": []}.
 Each memory object must contain:
 - "id": sequential string starting at "0"
@@ -971,10 +1007,7 @@ Each memory object must contain:
 - "evidence": {"message_index": integer, "excerpt": exact substring of that indexed non-system New Message}
 
 Optional fields are "valid_from", "valid_to", "linked_memory_ids", and "relation". Use "corroborates" only
-when an existing memory has the same subject, predicate, and value. Use "supersedes" only for an explicit new
-value replacing an old value. Use "conflicts_with" when the evidence is contradictory or ambiguous. Events and
-independent preferences do not supersede each other merely because they are newer or similar. Linked IDs must
-come verbatim from Existing Memories. Omit uncertain facts. Do not include reasoning, markdown, or extra keys.
+when an existing memory has the same subject, predicate, and value. Use "supersedes" when a New Message gives a NEW value for a state key (same subject + predicate) that an Existing Memory already holds -- this is a REPLACEMENT, not a second active fact; you MUST set relation="supersedes" and put that Existing Memory's ID in linked_memory_ids so the old value is no longer treated as current. Phrases like "changed to", "switched to", "now prefers", "no longer", "updated to", "moved to" signal replacement. Use "conflicts_with" when the evidence is contradictory or ambiguous. Events and independent preferences do not supersede each other merely because they are newer or similar. Linked IDs must come verbatim from Existing Memories. Omit uncertain facts. Do not include reasoning, markdown, or extra keys.
 """
 
 
