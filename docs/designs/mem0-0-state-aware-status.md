@@ -11,9 +11,19 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** none safe to auto-select after SA-03. The next technical step
-  is `SA-04` (live provider tier), but it is `BLOCKED_APPROVAL` (synthetic writes
-  + local-model time need explicit approval).
+- **Next task:** `SA-04` decision — the second provider run completed
+  (`ok=false`) but its **harness fix is verified**: `reconciled=true`,
+  `history_cleanup_complete=true`, `cleanup_history_deleted=4`,
+  `cleanup_remaining=0`. The 5 behavioral family checks are `false` because the
+  run aborted at the first family (**supersession**) on a live-model
+  extraction-quality failure, NOT a code defect (deterministic state-aware e2e
+  + lifecycle-family tests pass 8/8 with scripted `relation:"supersedes"`).
+  Root cause: `prism-ml/bonsai-27b` extracted `city_preference` as a state key
+  for "Kumamoto" but did **not** emit `relation:"supersedes"` for "City
+  preference changed to Matsue.", so Matsue landed as a second *active* memory;
+  current-recall returned both and the assertion failed. Open decision: switch
+  the local LLM (e.g. `qwen/qwen3.6-27b`), strengthen the extraction prompt, or
+  record SA-04 as BLOCKED on local-model extraction quality.
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
 - **Last published implementation and acceptance checkpoint:**
@@ -78,7 +88,7 @@ Use only these values in the ledger:
 | SA-01 | DONE | Publish the verified checkpoint as a draft PR without force-pushing. | SA-00. | Draft PR #1; published checkpoint `b86389bc`. |
 || SA-02 | DONE | Re-attest Git/PR state and run content-free shadow readiness, image-label, and receipt-reconciliation checks. | Resume in this checkout; no runtime mutation. | Re-attested 2026-08-10: local/remote/PR HEAD all `570c4a29`; working tree and `git diff --check` clean; PR #1 OPEN/DRAFT/MERGEABLE; readiness `ready`; reconcile-shadow `reconciled` (cross-store verified, legacy retained); shadow healthy on image rev `75021d0a`; legacy running/healthy. No divergence from the 2026-08-08 checkpoint. |
 | SA-03 | DONE | Refresh only the isolated shadow to the tested bounded-write target and attest its image/source. | SA-02 passes; explicit approval for shadow mutation (granted 2026-08-10 by owner override); the pushed target's runtime-affecting tree matches verified code head `7c8d60dc` (merged tip `fa7ae22` contains it). | Executed 2026-08-10: built `localhost/mem0_0-arch:fa7ae22` from the attested checkout (revision `fa7ae22`, source-tree-sha256 `2088ce3f…`); podman compose recreated `mem0_0-arch-shadow-mem0-1` with `--no-build --force-recreate`; image labels match attestation; running image matches; readiness `ready`; reconcile-shadow `reconciled` (postgres rows=10, sqlite history=24/messages=0 unchanged); legacy `mem0-arch-mem0-1` running/healthy. No stored-body or secret exposure. |
-| SA-04 | BLOCKED_APPROVAL | Run the five-family live provider tier against the canonical shadow. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Content-free report has `acceptance_class=bounded_personal_local`, `tier=provider`, `ok=true`, all provider checks true, budgets within limits, and `checks.reconciled=true`. |
+| SA-04 | IN_PROGRESS | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Second provider run completed `ok=false`. Harness fix VERIFIED: `reconciled=true`, `history_cleanup_complete=true`, `cleanup_history_deleted=4`, `cleanup_remaining=0`. Behavioral FAILURE is model-side: `prism-ml/bonsai-27b` did not emit `relation:"supersedes"` for the Matsue correction, so supersession/conflict families aborted. Deterministic e2e (8/8) confirms code path correct. Decision pending on model/prompt. |
 | SA-05 | READY | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report saved outside Git; exact cleanup succeeds; reconciliation passes; ledger records result without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
 | SA-07 | BLOCKED_DECISION | Approve an official benchmark compute, cost, time, and parallelism plan. | SA-04 and SA-05 pass. | Written decision covers STALE, Memora/FAMA, LoCoMo, LongMemEval, BEAM, identical arms, provider budget, estimated duration/cost, stop conditions, and unchanged acceptance thresholds. |
@@ -202,3 +212,46 @@ Append entries in JST and keep them chronological.
   unchanged); legacy `mem0-arch-mem0-1` running/healthy and not retargeted. No
   stored-body or secret exposure. `SA-03` → DONE. Next is `SA-04` (live provider
   tier) but it is `BLOCKED_APPROVAL`.
+- **2026-08-10 — SA-04 STARTED (live provider tier):** Owner approved synthetic
+  writes + local-model time and directed `prism-ml/bonsai-27b` as the shadow LLM
+  (replacing `qwen/qwen3.6-27b` in the private `shadow.env`; container
+  restarted, healthy/ready). LM Studio at `http://127.0.0.1:1234` already served
+  embeddings (`text-embedding-bge-m3`) and chat; `MEM0_LMSTUDIO_COMPAT=true` +
+  `MEM0_LMSTUDIO_REASONING_EFFORT=none` tame bonsai's reasoning for extraction.
+  Smoke test (one inferred add) returned exactly one parseable memory and a 200
+  cleanup delete. Provider tier (`--tier provider`, 5 families, 10 inferred
+  writes, 32-mutation budget, mandatory reconcile) running in the background;
+  evidence pending.
+- **2026-08-10 — SA-04 FIRST RUN FAILED + DIAGNOSIS + FIX:** First provider run
+  returned `ok=false`: 5 family checks false, `reconciled=false`, only 2
+  inferred writes (aborted at supersession). Content-free diagnosis: shadow
+  postgres `memories` = 11 (baseline 10), sqlite `history` = 31 (baseline 24),
+  `messages` = 4 (baseline 0). Two causes: (A) harness defect — `runner.py`
+  defaulted `--history-db=None`, so `AcceptanceFlows` never purged sqlite
+  (its own `_purge_history_rows` early-returns on None); fixed to default to
+  `live_verify.DEFAULT_HISTORY_DB` so cleanup purges history/messages and the
+  reconciliation gate can pass. (B) Earlier smoke tests leaked 1 postgres row +
+  7 history + 4 message rows because manual `curl DELETE` skips sqlite purge.
+  Reset: wiped the shadow postgres volume + removed `history.db`, then ran
+  `restore_shadow` from the verified receipt (baseline restored exactly:
+  postgres 10 / history 24 / messages 0, matching content_sha256); restarted the
+  app (healthy/ready). Second run launched without smoke contamination.
+- **2026-08-10 — SA-04 SECOND RUN: harness fix verified, behavioral FAIL is
+  model-side.** Second provider run exited 0 with `ok=false`. Harness fix
+  CONFIRMED working: `reconciled=true`, `history_cleanup_complete=true`,
+  `cleanup_history_deleted=4`, `cleanup_messages_deleted=2`,
+  `cleanup_remaining=0` (sqlite purge now runs). Behavioral failure: run
+  aborted at the **supersession** family after `created=2` inferred writes
+  (Kumamoto + Matsue). Content-free diagnosis (live-verify replay + direct
+  postgres payload inspection): bonsai-27b extracted `city_preference` as a
+  state key for Kumamoto but did NOT emit `relation:"supersedes"` for the Matsue
+  correction; Matsue was stored as a second *active* memory, so current-recall
+  returned both and `supersession_live_ok=false`. Because `_run_flow` raises on
+  the first failed family, the other four families never executed (their checks
+  stay `false`). This is a LOCAL-MODEL EXTRACTION-QUALITY limitation, not a code
+  defect: deterministic `test_state_aware_end_to_end.py` + `test_lifecycle_families.py`
+  pass 8/8 with scripted `relation:"supersedes"`. One orphan Kumamoto row left by
+  an earlier timed-out diagnostic was deleted via API; shadow restored to
+  baseline (postgres 10 / history 24 / messages 0, no synthetic residue).
+  DECISION NEEDED: switch local LLM (e.g. `qwen/qwen3.6-27b`), strengthen the
+  extraction prompt, or record SA-04 as BLOCKED on model quality.

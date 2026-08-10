@@ -30,7 +30,11 @@ from pathlib import Path
 from typing import Any
 
 from deployment.mem0_0_arch.backup_restore import BackupVerificationError, reconcile_shadow
-from deployment.mem0_0_arch.live_verify import DEFAULT_API_URL, DEFAULT_KEY_FILE
+from deployment.mem0_0_arch.live_verify import (
+    DEFAULT_API_URL,
+    DEFAULT_HISTORY_DB,
+    DEFAULT_KEY_FILE,
+)
 from deployment.mem0_0_arch.migration import MigrationConflictError, RuntimePaths
 from personal_acceptance.budget import BudgetLedger
 from personal_acceptance.families import FAMILIES, Family
@@ -256,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tier", choices=("deterministic", "provider", "full"), required=True)
     parser.add_argument("--api-url", default=DEFAULT_API_URL)
     parser.add_argument("--api-key-file", type=Path, default=DEFAULT_KEY_FILE)
-    parser.add_argument("--history-db", type=Path, default=None)
+    parser.add_argument("--history-db", type=Path, default=DEFAULT_HISTORY_DB)
     parser.add_argument("--receipt", type=Path, default=None)
     parser.add_argument("--home", type=Path, default=Path.home())
     parser.add_argument("--skip-jest", action="store_true")
