@@ -278,3 +278,27 @@ Append entries in JST and keep them chronological.
   reconcile-shadow passes. `SA-05` → DONE. With SA-04 and SA-05 both DONE and
   all remaining rows `BLOCKED_*`/`DEFERRED`, no task is safe to auto-select;
   awaiting an explicit owner decision (SA-07 benchmark plan, or lifting SA-06).
+- **2026-08-10 — OWNER STRATEGIC PIVOT: promote-first, fix-forward, no
+  rollback.** Owner set a new four-part direction and explicitly overrode two
+  ledger defaults:
+  1. Migrate local mem0 → permanent mem0_0 FIRST, with vanilla-baseline
+     measurement captured DURING promotion (not as a pre-cutover go/no-go gate).
+  2. Implement mem0_0 as a memory provider for Claude Code, Codex, oh-my-pi
+     (SA-09), and Hermes Agent harnesses (NEW scope — not previously ledgered).
+  3. Fix-forward on whatever promotion/integration measurement surfaces.
+  4. OSS-ready, clean workspace, merge, push.
+  OWNER OVERRIDE of `SA-12`: the rollback drill + retained-rollback-state gate
+  is LIFTED. Response policy during promotion is FIX-FORWARD ONLY — no revert
+  path, owner accepts the risk explicitly. Recorded as an owner override dated
+  2026-08-10; SA-12's Done-criteria cell still describes the original design
+  and must be read together with this entry.
+  Sequencing consequence: SA-07 (benchmark/measurement plan) is RE-PURPOSED
+  from a blocking go/no-go gate into the instrumentation that makes
+  "measure during promotion" possible — it is built in Phase A, before SA-12
+  cutover in Phase B, but does NOT gate the cutover on its results. Phases:
+  A) instrument/measurement harness (SA-07 re-scoped); B) promote + measure
+  (SA-12, fix-forward); C) harness integrations (SA-09 OMP + NEW
+  Claude Code/Codex/Hermes tasks); D) fix-forward; E) OSS-ready/merge/push
+  (SA-10/SA-11). New harness-integration tasks and the re-scoped SA-07 are
+  NOT yet written as ledger rows — a full implementation plan is being drafted
+  (see `docs/superpowers/plans/`) before any row is added or status changed.
