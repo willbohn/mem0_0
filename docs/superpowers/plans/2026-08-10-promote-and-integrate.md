@@ -67,17 +67,22 @@ bodies) to a gitignored path; a diff tool compares two scorecards and reports de
 
 ### Task A1: Scorecard schema + writer
 
+> **Path correction (2026-08-10):** `evaluation/` is a **git submodule**
+> (`mem0ai/memory-benchmarks`) and is NOT importable from the repo root. Our
+> instrumentation must live in a **repo-owned** package `evaluation_instrument/`
+> at the repo root (NOT inside the submodule). Tests live at `tests/evaluation_instrument/`.
+
 **Objective:** Define the content-free scorecard contract every arm emits.
 
 **Files:**
-- Create: `evaluation/benchmarks/common/scorecard.py`
-- Test: `tests/evaluation/test_scorecard.py`
+- Create: `evaluation_instrument/__init__.py` (empty), `evaluation_instrument/scorecard.py`
+- Test: `tests/evaluation_instrument/__init__.py` (empty), `tests/evaluation_instrument/test_scorecard.py`
 
 **Step 1: Write failing test**
 
 ```python
 def test_scorecard_round_trip(tmp_path):
-    from benchmarks.common.scorecard import Scorecard
+    from evaluation_instrument.scorecard import Scorecard
     card = Scorecard(
         benchmark="locomo", arm="vanilla", project_name="p",
         mem0_host="http://localhost:8888", model="m",
@@ -93,13 +98,13 @@ def test_scorecard_round_trip(tmp_path):
 
 **Step 2: Run test to verify failure**
 
-Run: `pytest tests/evaluation/test_scorecard.py -v`
-Expected: FAIL — `ModuleNotFoundError: benchmarks.common.scorecard`
+Run: `pytest tests/evaluation_instrument/test_scorecard.py -v`
+Expected: FAIL — `ModuleNotFoundError: evaluation_instrument`
 
 **Step 3: Write minimal implementation**
 
 ```python
-# evaluation/benchmarks/common/scorecard.py
+# evaluation_instrument/scorecard.py
 """Content-free benchmark scorecard: scalar scores + run metadata only."""
 from __future__ import annotations
 
@@ -128,13 +133,13 @@ class Scorecard:
 
 **Step 4: Run test to verify pass**
 
-Run: `pytest tests/evaluation/test_scorecard.py -v`
+Run: `pytest tests/evaluation_instrument/test_scorecard.py -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add evaluation/benchmarks/common/scorecard.py tests/evaluation/test_scorecard.py
+git add evaluation_instrument/ tests/evaluation_instrument/
 git commit -m "feat(eval): content-free benchmark scorecard schema"
 ```
 
@@ -143,15 +148,15 @@ git commit -m "feat(eval): content-free benchmark scorecard schema"
 **Objective:** Compare two scorecards (vanilla vs candidate) and report per-metric deltas.
 
 **Files:**
-- Create: `evaluation/benchmarks/common/scorecard_diff.py`
-- Test: `tests/evaluation/test_scorecard_diff.py`
+- Create: `evaluation_instrument/scorecard_diff.py`
+- Test: `tests/evaluation_instrument/test_scorecard_diff.py`
 
 **Step 1: Write failing test**
 
 ```python
 def test_diff_reports_delta(tmp_path):
-    from benchmarks.common.scorecard import Scorecard
-    from benchmarks.common.scorecard_diff import diff
+    from evaluation_instrument.scorecard import Scorecard
+    from evaluation_instrument.scorecard_diff import diff
     v = Scorecard("locomo", "vanilla", "p", "h", "m", {"f1": 0.5}, 40)
     c = Scorecard("locomo", "candidate", "p", "h", "m", {"f1": 0.6}, 40)
     report = diff(v, c)
@@ -161,19 +166,19 @@ def test_diff_reports_delta(tmp_path):
 
 **Step 2: Run test to verify failure**
 
-Run: `pytest tests/evaluation/test_scorecard_diff.py -v`
+Run: `pytest tests/evaluation_instrument/test_scorecard_diff.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
 **Step 3: Write minimal implementation**
 
 ```python
-# evaluation/benchmarks/common/scorecard_diff.py
+# evaluation_instrument/scorecard_diff.py
 """Compare a vanilla and candidate scorecard; flag regressions."""
 from __future__ import annotations
 
 from typing import Any
 
-from benchmarks.common.scorecard import Scorecard
+from evaluation_instrument.scorecard import Scorecard
 
 
 def diff(vanilla: Scorecard, candidate: Scorecard) -> dict[str, Any]:
@@ -196,13 +201,13 @@ def diff(vanilla: Scorecard, candidate: Scorecard) -> dict[str, Any]:
 
 **Step 4: Run test to verify pass**
 
-Run: `pytest tests/evaluation/test_scorecard_diff.py -v`
+Run: `pytest tests/evaluation_instrument/test_scorecard_diff.py -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add evaluation/benchmarks/common/scorecard_diff.py tests/evaluation/test_scorecard_diff.py
+git add evaluation_instrument/scorecard_diff.py tests/evaluation_instrument/test_scorecard_diff.py
 git commit -m "feat(eval): scorecard diff tool with regression flag"
 ```
 
@@ -212,14 +217,14 @@ git commit -m "feat(eval): scorecard diff tool with regression flag"
 `--mem0-host` and emits a Scorecard.
 
 **Files:**
-- Create: `evaluation/benchmarks/run_arm.py`
-- Test: `tests/evaluation/test_run_arm.py`
+- Create: `evaluation_instrument/run_arm.py`
+- Test: `tests/evaluation_instrument/test_run_arm.py`
 
 **Step 1: Write failing test**
 
 ```python
 def test_arm_command_construction():
-    from benchmarks.run_arm import build_command
+    from evaluation_instrument.run_arm import build_command
     cmd = build_command(
         benchmark="locomo", arm="vanilla", project_name="p",
         mem0_host="http://localhost:8888", model="m",
@@ -231,13 +236,13 @@ def test_arm_command_construction():
 
 **Step 2: Run test to verify failure**
 
-Run: `pytest tests/evaluation/test_run_arm.py -v`
+Run: `pytest tests/evaluation_instrument/test_run_arm.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
 **Step 3: Write minimal implementation**
 
 ```python
-# evaluation/benchmarks/run_arm.py
+# evaluation_instrument/run_arm.py
 """Run one benchmark arm (vanilla or candidate) and emit a content-free scorecard."""
 from __future__ import annotations
 
@@ -266,28 +271,37 @@ def build_command(*, benchmark: str, arm: str, project_name: str,
 
 **Step 4: Run test to verify pass**
 
-Run: `pytest tests/evaluation/test_run_arm.py -v`
+Run: `pytest tests/evaluation_instrument/test_run_arm.py -v`
 Expected: PASS
 
 **Step 5: Commit**
 
 ```bash
-git add evaluation/benchmarks/run_arm.py tests/evaluation/test_run_arm.py
+git add evaluation_instrument/run_arm.py tests/evaluation_instrument/test_run_arm.py
 git commit -m "feat(eval): arm-runner command builder (mem0-host arm switch)"
 ```
 
-### Task A4: Smoke-run the vanilla arm on LOCOMO
+### Task A4: Smoke-run the vanilla arm on LOCOMO  [DEFERRED to Phase B — 2026-08-10]
 
-**Objective:** Prove the instrument end-to-end against the legacy server before cutover.
+> **Owner decision (2026-08-10):** A4 is DEFERRED from Phase A to Phase B. Reasons:
+> (1) the legacy server on `:8888` is LLM-`degraded` (configured model
+> `google/gemma-4-12b` not loaded in LM Studio); (2) the benchmark runners default to
+> OpenAI `gpt-5` and need an LLM route decision; (3) a LOCOMO arm ingests real benchmark
+> data into the pristine legacy baseline we keep reconciled. The instrumentation tooling
+> (A1–A3) is complete and tested WITHOUT a live run. A4 runs in Phase B against a
+> THROWAWAY vanilla instance (not the reconciled legacy baseline) once the LLM route is
+> decided. Phase A is considered COMPLETE at A3.
+
+**Objective:** Prove the instrument end-to-end against a vanilla instance before cutover.
 
 **Files:**
-- Modify: `evaluation/benchmarks/run_arm.py` (parse runner output → Scorecard)
+- Modify: `evaluation_instrument/run_arm.py` (parse runner output → Scorecard)
 
-**Step 1:** Confirm legacy server healthy at `http://localhost:8888`.
-Run: `curl -sf http://localhost:8888/health || echo "legacy not on 8888"`
+**Step 1:** Confirm a vanilla server is healthy (throwaway instance, NOT the reconciled
+legacy baseline) and an answerer/judge LLM route is configured.
 
 **Step 2:** Run the vanilla arm (background — LLM-bound).
-Run: `python -m benchmarks.run_arm --benchmark locomo --arm vanilla --project-name sa12 --mem0-host http://localhost:8888`
+Run: `python -m evaluation_instrument.run_arm --benchmark locomo --arm vanilla --project-name sa12 --mem0-host <vanilla-url>`
 Expected: writes `locomo-vanilla-scorecard.json` with `arm=vanilla`, scalar scores.
 
 **Step 3:** Verify scorecard is content-free.
@@ -296,7 +310,7 @@ Run: `python -c "import json; d=json.load(open('locomo-vanilla-scorecard.json'))
 **Step 4: Commit**
 
 ```bash
-git add evaluation/benchmarks/run_arm.py
+git add evaluation_instrument/run_arm.py
 git commit -m "feat(eval): parse runner summary into scorecard; vanilla LOCOMO smoke"
 ```
 

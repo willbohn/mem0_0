@@ -11,8 +11,8 @@ blocker is found, or a session ends. The detailed history remains in
 ## Current state
 
 - **Mode:** `PAUSED_SAFE`
-- **Next task:** `SA-07` (IN_PROGRESS) — build the content-free benchmark
-  instrumentation (Phase A of the promote-and-integrate plan). Plan:
+- **Next task:** `SA-12` cutover prep (Phase B) — REQUIRES owner re-approval to
+  execute. SA-07 instrumentation is DONE. Plan:
   `docs/superpowers/plans/2026-08-10-promote-and-integrate.md`.
 - **Branch:** `feat/state-aware-memory-python` (fast-forward merged into `main`
   on 2026-08-10).
@@ -81,7 +81,7 @@ Use only these values in the ledger:
 | SA-04 | DONE | Run the five-family live provider tier against the canonical shadow; prove the chosen local model drives the state-aware lifecycle correctly end-to-end. | SA-03 passes; local provider ready; explicit approval for synthetic writes and local-model time. | Third provider run (2026-08-10) GREEN: `ok=true`, all 12 checks true (supersession/corroboration/dispute/reversion/direct-vs-lifecycle all `*_live_ok=true`), `reconciled=true`, `cleanup_remaining=0`, `budget_ok=true` (mutations=31 ≤ 32). Final reconcile-shadow: postgres 10 / sqlite history 24 / messages 0, matching the receipt baseline exactly. |
 | SA-05 | DONE | Preserve and review the provider-tier report and reconciliation evidence; clean only exact synthetic artifacts. | SA-04 attempted, whether pass or fail. | Scalar-only report preserved outside Git at `.personal-acceptance/report.json` (gitignored), SHA-256 `a91d5a3f…5dd66a`. Aggregates (no bodies/scope values): `ok=true`, `reconciled=true`, `created=11`, `cleanup_deleted=10`, `cleanup_history_deleted=20`, `cleanup_messages_deleted=10`, `cleanup_remaining=0`. Exact-ID cleanup succeeded; independent reconcile-shadow passes (pg 10 / sqlite history 24 / messages 0). Recorded without memory bodies or scope values. |
 | SA-06 | DEFERRED | Resolve the pre-existing server auth/params test coupling in a separate bounded change. | Separate design/approval because CI workflow edits are currently prohibited. | Regression test fails on pinned baseline, fix passes full affected suites, and no unrelated lifecycle change enters PR #1. |
-| SA-07 | IN_PROGRESS | RE-SCOPED (2026-08-10): build the content-free benchmark instrumentation (scorecard schema, diff tool, arm-runner wrapper) so promotion can be measured; NO LONGER a go/no-go gate. | Owner pivot 2026-08-10; SA-04/05 pass. | Scorecard + diff tool + arm-runner exist with tests; vanilla LOCOMO arm emits a reproducible content-free scorecard. |
+| SA-07 | DONE | RE-SCOPED (2026-08-10): build the content-free benchmark instrumentation (scorecard schema, diff tool, arm-runner wrapper) so promotion can be measured; NO LONGER a go/no-go gate. | Owner pivot 2026-08-10; SA-04/05 pass. | Instrumentation COMPLETE 2026-08-10: repo-owned `evaluation_instrument/` package (scorecard, scorecard_diff, run_arm) with 8 passing tests, ruff-clean. Relocated out of the `evaluation/` submodule (not importable from repo root). Live smoke-run (A4) DEFERRED to Phase B per owner — legacy `:8888` is LLM-degraded and a LOCOMO arm would mutate the reconciled baseline. |
 | SA-08 | BLOCKED_DEPENDENCY | Execute and evaluate the official benchmark matrix (now the candidate arm during promotion). | SA-07 instrumentation built; candidate live post-cutover. | Reproducible manifests and content-free scorecards for vanilla + candidate arms; `scorecard_diff` report recorded. |
 | SA-09 | BLOCKED_DEPENDENCY | Install and behaviorally validate the OMP integration in a dedicated profile. | OMP installed through its owning system workflow; separate approval to write under `~/.omp`. | Exact six-tool discovery, scoped CRUD, search-before-answer, durable-write, compaction/restart persistence, exact cleanup, and reconciliation pass. A transport handshake alone is insufficient. |
 | SA-10 | BLOCKED_DEPENDENCY | Re-run complete supported suites and obtain fresh verifier and critic decisions on the final merge candidate. | SA-04/05, SA-08, and every merge-scope prerequisite complete; final candidate SHA frozen. | Full Python/server/deployment/TypeScript evidence, baseline differential, verifier confirmation, critic approval, clean worktree, and exact pushed SHA. |
@@ -310,3 +310,19 @@ Append entries in JST and keep them chronological.
   `evaluation/benchmarks/`) already take a `--backend oss|cloud` switch, so no
   new benchmark tooling is required — Phase A wires the OSS arm at vanilla
   `main`, captures the baseline, then the candidate arm runs post-cutover.
+- **2026-08-10 — SA-07 DONE (instrumentation built, Phase A complete at A3):**
+  Adopted the promote-and-integrate plan and re-scoped the ledger (SA-07 →
+  instrumentation, SA-12 → fix-forward cutover with rollback gate waived; added
+  SA-13/14/15 harness integrations). Built the repo-owned `evaluation_instrument/`
+  package: `scorecard.py` (content-free Scorecard dataclass + writer),
+  `scorecard_diff.py` (vanilla-vs-candidate delta + regression flag),
+  `run_arm.py` (arm command builder; `--mem0-host` switches vanilla
+  `localhost:8888` vs candidate `127.0.0.1:28889`). KEY CORRECTION mid-task:
+  `evaluation/` is a git submodule not importable from the repo root, so the
+  instrumentation lives in a NEW repo-owned package, not the submodule. 8 tests
+  pass; ruff clean; full offline sweep `tests/evaluation_instrument/ +
+  tests/personal_acceptance/` = 62 passed. Owner decision: live smoke-run (A4)
+  DEFERRED to Phase B — legacy `:8888` is LLM-`degraded` (`google/gemma-4-12b`
+  not loaded) and a LOCOMO arm would ingest into the reconciled legacy baseline.
+  `SA-07` → DONE. Next is SA-12 cutover prep (Phase B), which REQUIRES owner
+  re-approval before executing the cutover.
